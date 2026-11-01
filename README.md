@@ -9,12 +9,13 @@ The flashed board checked for this scaffold is `imx95-15x15-lpddr4x-frdm` runnin
 ## Layout
 
 ```text
-src/anpr/                  application package
-configs/config.example.json
-deploy/                    systemd unit and udev rule
-datasets/calibration/      INT8 calibration frames (images are gitignored)
-tools/host/export_int8.py  host-side INT8 export preflight
-docs/                      architecture, upstreams, model export
+src/anpr/                     application package
+configs/config.example.json   board config; videoCapture RTSP source
+deploy/                       systemd unit and udev rule
+datasets/calibration/         INT8 calibration frames (images are gitignored)
+tools/host/export_int8.py     host-side INT8 export preflight
+tools/host/run-rtsp-server.sh publish MP4 files for the board
+docs/                         architecture, upstreams, model export
 ```
 
 Install paths on the board, used later, are `/opt/anpr` and `/etc/anpr/config.json`.
@@ -40,4 +41,12 @@ python -m anpr run --config configs/config.example.json
 python -m anpr probe-npu
 ```
 
-`run` wires stream pipelines and frame slots, then returns. The live capture loop is a later phase.
+`run` stays up and reads each enabled stream until SIGTERM. The sample stream is `rtsp://10.0.0.117:8554/videoCapture`.
+
+Publish MP4 files from this PC, then install the same JSON on the board as `/etc/anpr/config.json`:
+
+```bash
+tools/host/run-rtsp-server.sh /path/to/videos
+```
+
+MediaMTX is not in git. Set `MEDIAMTX_BIN` or place the `mediamtx` binary next to the script. The script prints the board URL from this PC's current address. Video tracks must be H.264.

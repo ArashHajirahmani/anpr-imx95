@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-STREAM_TYPES = frozenset({"rtp", "v4l2"})
+STREAM_TYPES = frozenset({"rtsp", "rtp", "v4l2"})
 
 
 class ConfigError(ValueError):

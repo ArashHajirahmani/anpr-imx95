@@ -26,7 +26,7 @@ Keep a single interpreter on one thread.
 
 ## Capture
 
-Primary open path is PyGObject. Import `gi` inside the open function. Hardware H.264 decode is `v4l2h264dec` (Wave6 via gst-plugins-good) followed by `imxvideoconvert_g2d`.
+Primary open path is PyGObject. Import `gi` inside the open function. The bench publisher is `tools/host/run-rtsp-server.sh`, path `videoCapture`, port 8554. The board reads it with `rtspsrc` over TCP. Hardware H.264 decode is `v4l2h264dec` (Wave6 via gst-plugins-good) followed by `imxvideoconvert_g2d`.
 
 If appsink mapping fails, open the same pipeline with `cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)`. OpenCV 4.13.0.imx on this image is built with GStreamer.
 

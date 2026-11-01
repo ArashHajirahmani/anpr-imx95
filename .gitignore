@@ -9,3 +9,4 @@ build/
 *.pt
 *.tflite
 datasets/calibration/images/
+tools/host/mediamtx

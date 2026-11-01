@@ -1,12 +1,14 @@
-"""Command line entry points for the ANPR scaffold."""
+"""Command line entry points for the ANPR service."""
 
 import argparse
 import logging
+import signal
+import threading
 from pathlib import Path
 
 from anpr.config import ConfigError, load_config
 from anpr.infer import probe_delegates
-from anpr.pipeline import wire
+from anpr.pipeline import run_streams
 
 logger = logging.getLogger("anpr")
 
@@ -18,7 +20,7 @@ def main(argv: list[str] | None = None) -> int:
     check_config = subcommands.add_parser("check-config", help="validate a JSON config")
     check_config.add_argument("--config", type=Path, required=True)
 
-    run = subcommands.add_parser("run", help="wire streams and exit")
+    run = subcommands.add_parser("run", help="capture configured streams until stopped")
     run.add_argument("--config", type=Path, required=True)
 
     subcommands.add_parser("probe-npu", help="search for the TFLite Neutron delegate")
@@ -55,10 +57,17 @@ def _run(path: Path) -> int:
     except (OSError, ConfigError) as exc:
         logger.error("%s", exc)
         return 1
-    wired = wire(config)
+    stop = threading.Event()
+
+    def _stop(signum: int, _frame: object) -> None:
+        logger.info("received signal %s", signum)
+        stop.set()
+
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
+    wired = run_streams(config, stop)
     for name, pipeline in wired.pipelines.items():
-        logger.info("stream %s pipeline: %s", name, pipeline)
-    logger.info("live capture is not started in this scaffold")
+        logger.info("stream %s stopped: %s", name, pipeline)
     return 0
 
 

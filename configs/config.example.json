@@ -1,11 +1,11 @@
 {
   "streams": [
     {
-      "name": "gate_entrance",
-      "type": "rtp",
-      "uri": "rtp://192.168.1.100:5004",
+      "name": "videoCapture",
+      "type": "rtsp",
+      "uri": "rtsp://10.0.0.117:8554/videoCapture",
       "enabled": true,
-      "pipeline": "udpsrc port=5004 ! application/x-rtp,encoding-name=H264 ! rtph264depay ! h264parse ! v4l2h264dec ! imxvideoconvert_g2d ! video/x-raw,format=BGR ! appsink drop=true max-buffers=1"
+      "pipeline": ""
     },
     {
       "name": "local_test",

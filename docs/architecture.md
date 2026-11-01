@@ -22,17 +22,15 @@ Checked on `root@10.0.0.165` with `imx-image-full`:
 
 ## Capture
 
-Primary path is PyGObject (`python3-pygobject` 3.56.1, GStreamer 1.28.1). `capture.py` imports `gi` only when a caller opens a pipeline.
+Primary path is PyGObject (`python3-pygobject` 3.56.1, GStreamer 1.28.1). `capture.py` imports `gi` only when a caller opens a pipeline. `anpr run` keeps one thread per enabled stream and republishes the latest frame until SIGTERM.
 
-Hardware H.264 decode is `v4l2h264dec` in `libgstvideo4linux2.so` (gst-plugins-good). The image firmware is Wave6 (`firmware-imx-vpu-wave`). `avdec_h264` is not installed. Colorspace conversion uses `imxvideoconvert_g2d`.
-
-RTP pipeline:
+The bench publisher is `tools/host/run-rtsp-server.sh`. It serves H.264 MP4 files on `rtsp://<pc-address>:8554/videoCapture`. From this PC that address is `10.0.0.117`. The board opens it with `rtspsrc` over TCP. Hardware decode is `v4l2h264dec` in `libgstvideo4linux2.so` (gst-plugins-good, Wave6 firmware `firmware-imx-vpu-wave`). Colorspace conversion uses `imxvideoconvert_g2d`.
 
 ```text
-udpsrc port=5004 ! application/x-rtp,encoding-name=H264 ! rtph264depay ! h264parse ! v4l2h264dec ! imxvideoconvert_g2d ! video/x-raw,format=BGR ! appsink drop=true max-buffers=1
+rtspsrc location=rtsp://10.0.0.117:8554/videoCapture latency=100 protocols=tcp ! rtph264depay ! h264parse ! v4l2h264dec ! imxvideoconvert_g2d ! video/x-raw,format=BGR ! appsink name=anpr drop=true max-buffers=1 sync=false
 ```
 
-OpenCV 4.13.0.imx is built with GStreamer (`cv2.CAP_GSTREAMER`). If appsink mapping gets in the way, open the same string with:
+A raw RTP listener remains available for `type: "rtp"`. OpenCV 4.13.0.imx is built with GStreamer (`cv2.CAP_GSTREAMER`) if the appsink path has to be replaced with the same pipeline string:
 
 ```python
 cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)

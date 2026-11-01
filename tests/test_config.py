@@ -11,8 +11,9 @@ EXAMPLE = ROOT / "configs" / "config.example.json"
 
 def test_example_config_loads() -> None:
     config = load_config(EXAMPLE)
-    assert [stream.name for stream in config.streams] == ["gate_entrance", "local_test"]
-    assert config.enabled_streams()[0].name == "gate_entrance"
+    assert [stream.name for stream in config.streams] == ["videoCapture", "local_test"]
+    assert config.enabled_streams()[0].name == "videoCapture"
+    assert config.enabled_streams()[0].uri == "rtsp://10.0.0.117:8554/videoCapture"
     assert config.detector.delegate_path == ""
     assert config.detector.conf_threshold == 0.5
     assert config.recognizer.enabled is False
@@ -36,21 +37,17 @@ def test_rejects_unknown_stream_type(tmp_path: Path) -> None:
 
 
 def test_rejects_duplicate_stream_names(tmp_path: Path) -> None:
-    text = EXAMPLE.read_text(encoding="utf-8").replace('"local_test"', '"gate_entrance"', 1)
+    text = EXAMPLE.read_text(encoding="utf-8").replace('"local_test"', '"videoCapture"', 1)
     path = tmp_path / "config.json"
     path.write_text(text, encoding="utf-8")
     with pytest.raises(ConfigError, match="unique"):
         load_config(path)
 
 
-def test_run_wires_and_exits() -> None:
-    assert main(["run", "--config", str(EXAMPLE)]) == 0
-
-
-def _write(tmp_path: Path, *, conf_threshold: float = 0.5, stream_type: str = "rtp") -> Path:
+def _write(tmp_path: Path, *, conf_threshold: float = 0.5, stream_type: str = "rtsp") -> Path:
     text = EXAMPLE.read_text(encoding="utf-8")
     text = text.replace('"conf_threshold": 0.5', f'"conf_threshold": {conf_threshold}')
-    text = text.replace('"type": "rtp"', f'"type": "{stream_type}"', 1)
+    text = text.replace('"type": "rtsp"', f'"type": "{stream_type}"', 1)
     path = tmp_path / "config.json"
     path.write_text(text, encoding="utf-8")
     return path

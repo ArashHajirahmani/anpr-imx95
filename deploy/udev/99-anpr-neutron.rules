@@ -1,0 +1,1 @@
+KERNEL=="neutron0", GROUP="video", MODE="0660"

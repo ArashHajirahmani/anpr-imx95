@@ -1,0 +1,18 @@
+[Unit]
+Description=i.MX95 edge ANPR service
+After=network.target
+
+[Service]
+Type=simple
+User=anpr
+Group=video
+WorkingDirectory=/opt/anpr
+Environment=PYTHONPATH=/opt/anpr/src
+ExecStart=/usr/bin/python3 -m anpr run --config /etc/anpr/config.json
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

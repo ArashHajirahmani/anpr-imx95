@@ -2,13 +2,17 @@
 
 import argparse
 import logging
+import os
 import signal
 import threading
 from pathlib import Path
 
+from anpr.api import ApiService
 from anpr.config import ConfigError, load_config
 from anpr.infer import probe_delegates
 from anpr.pipeline import run_streams
+from anpr.results import ResultStore
+from anpr.web import WebService
 
 logger = logging.getLogger("anpr")
 
@@ -23,18 +27,31 @@ def main(argv: list[str] | None = None) -> int:
     run = subcommands.add_parser("run", help="capture configured streams until stopped")
     run.add_argument("--config", type=Path, required=True)
 
+    web = subcommands.add_parser("web", help="serve the browser page for plate results")
+    web.add_argument("--config", type=Path, required=True)
+
     subcommands.add_parser("probe-npu", help="search for the TFLite Neutron delegate")
 
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    _configure_logging()
     if args.command == "check-config":
         return _check_config(args.config)
     if args.command == "run":
         return _run(args.config)
+    if args.command == "web":
+        return _web(args.config)
     if args.command == "probe-npu":
         return _probe_npu()
     parser.error(f"unknown command: {args.command}")
     return 2
+
+
+def _configure_logging() -> None:
+    raw = os.environ.get("ANPR_LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, raw, None)
+    if not isinstance(level, int):
+        level = logging.INFO
+    logging.basicConfig(level=level, format="%(levelname)s %(name)s: %(message)s")
 
 
 def _check_config(path: Path) -> int:
@@ -48,6 +65,13 @@ def _check_config(path: Path) -> int:
     logger.info("enabled streams: %s", enabled)
     logger.info("detector: %s", config.detector.path)
     logger.info("recognizer enabled: %s", config.recognizer.enabled)
+    logger.info("runtime: %s", config.service.runtime)
+    logger.info("api socket: %s", config.service.api_socket)
+    logger.info(
+        "web listen: %s:%s",
+        config.web.listen_host,
+        config.web.listen_port,
+    )
     return 0
 
 
@@ -58,17 +82,53 @@ def _run(path: Path) -> int:
         logger.error("%s", exc)
         return 1
     stop = threading.Event()
+    _install_stop(stop)
+    store = ResultStore(config.service.history_limit)
+    api = ApiService(store, Path(config.service.api_socket))
+    api.start()
+    try:
+        wired = run_streams(config, stop, results=store)
+    finally:
+        api.close()
+    for name, pipeline in wired.pipelines.items():
+        logger.info("stream %s stopped: %s", name, pipeline)
+    return 0
 
+
+def _web(path: Path) -> int:
+    try:
+        config = load_config(path)
+    except (OSError, ConfigError) as exc:
+        logger.error("%s", exc)
+        return 1
+    stop = threading.Event()
+    _install_stop(stop)
+    try:
+        web = WebService(
+            api_socket=Path(config.service.api_socket),
+            host=config.web.listen_host,
+            port=config.web.listen_port,
+            poll_seconds=config.web.poll_seconds,
+        )
+        web.start()
+    except OSError as exc:
+        logger.error("web client failed to listen: %s", exc)
+        return 1
+    try:
+        while not stop.is_set():
+            stop.wait(0.5)
+    finally:
+        web.close()
+    return 0
+
+
+def _install_stop(stop: threading.Event) -> None:
     def _stop(signum: int, _frame: object) -> None:
         logger.info("received signal %s", signum)
         stop.set()
 
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
-    wired = run_streams(config, stop)
-    for name, pipeline in wired.pipelines.items():
-        logger.info("stream %s stopped: %s", name, pipeline)
-    return 0
 
 
 def _probe_npu() -> int:

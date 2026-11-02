@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>ANPR</title>
+<style>
+  body {
+    margin: 0;
+    background: #10140f;
+    color: #e7f0e4;
+    font-family: "DejaVu Sans", sans-serif;
+  }
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 0.8rem 1rem 0;
+  }
+  h1 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+  }
+  #status { margin: 0; font-size: 0.95rem; }
+  #status.ok { color: #39ff14; }
+  #status.wait { color: #d7e0d4; }
+  #status.down { color: #ffb020; }
+  #error {
+    margin: 0.4rem 1rem 0;
+    color: #ffb020;
+    font-size: 0.9rem;
+  }
+  main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(12rem, 22rem);
+    gap: 1rem;
+    padding: 1rem;
+  }
+  .live { min-width: 0; }
+  .frame {
+    position: relative;
+    background: #0a0c0a;
+    overflow: hidden;
+  }
+  .frame.waiting { min-height: 16rem; }
+  .history .frame.waiting { min-height: 6rem; }
+  .frame img { width: 100%; height: auto; display: block; }
+  .boxes { position: absolute; inset: 0; pointer-events: none; }
+  .box {
+    position: absolute;
+    border: 3px solid #39ff14;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.85);
+    box-sizing: border-box;
+  }
+  #plate {
+    display: inline-block;
+    margin: 0.7rem 0 0.3rem;
+    padding: 0.08em 0.28em;
+    background: #f4e04a;
+    color: #161616;
+    font-family: "DejaVu Sans Mono", monospace;
+    font-size: clamp(2.6rem, 7vw, 5.5rem);
+    letter-spacing: 0.08em;
+    line-height: 1.05;
+  }
+  #plate.empty { background: transparent; color: #7d8b7a; }
+  #meta {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.28rem 1.1rem;
+    margin: 0.6rem 0 0;
+    max-width: 36rem;
+    color: #d5e0d2;
+    font-size: 0.95rem;
+  }
+  #meta dt { margin: 0; color: #8b9788; }
+  #meta dd { margin: 0; }
+  #meta dt.timing,
+  #meta dd.timing { color: #f4e04a; }
+  .history { display: flex; flex-direction: column; gap: 0.75rem; }
+  .history article { background: #181c17; padding: 0.5rem; }
+  .hist-plate {
+    margin: 0.35rem 0 0;
+    font-family: "DejaVu Sans Mono", monospace;
+    font-size: 1.35rem;
+    letter-spacing: 0.06em;
+  }
+  .hist-meta { margin: 0.15rem 0 0; color: #b7c4b4; font-size: 0.8rem; }
+  footer {
+    padding: 0 1rem 1rem;
+    color: #7d8b7a;
+    font-size: 0.75rem;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>ANPR</h1>
+  <p id="status" class="wait">connecting</p>
+</header>
+<p id="error">waiting for anpr api</p>
+<main>
+  <section class="live">
+    <div id="live-frame" class="frame waiting">
+      <img id="live-image" alt="">
+      <div id="live-boxes" class="boxes"></div>
+    </div>
+    <p id="plate" class="empty">—</p>
+    <dl id="meta"></dl>
+  </section>
+  <section id="history" class="history"></section>
+</main>
+<footer id="debug"></footer>
+<script>
+const page = {
+  status: document.getElementById("status"),
+  error: document.getElementById("error"),
+  liveFrame: document.getElementById("live-frame"),
+  liveImage: document.getElementById("live-image"),
+  liveBoxes: document.getElementById("live-boxes"),
+  plate: document.getElementById("plate"),
+  meta: document.getElementById("meta"),
+  history: document.getElementById("history"),
+  debug: document.getElementById("debug"),
+};
+
+let liveToken = "";
+let historyToken = "";
+
+function tick() {
+  fetch("/api/state", { cache: "no-store" })
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error("state " + response.status);
+      }
+      return response.json();
+    })
+    .then(render)
+    .catch((error) => {
+      page.error.hidden = false;
+      page.error.textContent = "page lost the web client: " + error;
+      page.status.textContent = "api down";
+      page.status.className = "down";
+    });
+}
+
+function render(state) {
+  if (state.ok) {
+    page.status.textContent = "live";
+    page.status.className = "ok";
+  } else if (!state.failures) {
+    page.status.textContent = "connecting";
+    page.status.className = "wait";
+  } else {
+    page.status.textContent = "api down";
+    page.status.className = "down";
+  }
+  if (state.error) {
+    page.error.hidden = false;
+    page.error.textContent = state.error;
+  } else {
+    page.error.hidden = true;
+    page.error.textContent = "";
+  }
+  renderLive(state.latest);
+  renderHistory(state.history, state.history_limit || 4);
+  const frameId = state.latest ? state.latest.frame_id : "none";
+  page.debug.textContent = [
+    state.ok ? "api up" : "api down",
+    state.api_socket || "",
+    "frame " + frameId,
+    "failures " + state.failures,
+  ].join(" · ");
+}
+
+function renderLive(latest) {
+  if (!latest || !latest.image) {
+    page.liveFrame.classList.add("waiting");
+    page.liveImage.removeAttribute("src");
+    page.liveBoxes.replaceChildren();
+    page.plate.textContent = "—";
+    page.plate.classList.add("empty");
+    page.meta.textContent = "";
+    liveToken = "";
+    return;
+  }
+  page.liveFrame.classList.remove("waiting");
+  if (liveToken !== String(latest.frame_id)) {
+    liveToken = String(latest.frame_id);
+    page.liveImage.src = latest.image;
+  }
+  const plates = latest.plates || [];
+  drawBoxes(page.liveBoxes, plates, latest.width, latest.height);
+  if (!plates.length) {
+    page.plate.textContent = "—";
+    page.plate.classList.add("empty");
+    fillMeta(page.meta, frameRows(latest).concat([{ label: "Plate", value: "none" }]));
+    return;
+  }
+  page.plate.classList.remove("empty");
+  page.plate.textContent = plates[0].text;
+  const rows = plateRows(plates[0]).concat(timingRows(latest), frameRows(latest));
+  if (plates.length > 1) {
+    rows.push({
+      label: "Other plates",
+      value: plates.slice(1).map((item) => item.text).join(", "),
+    });
+  }
+  fillMeta(page.meta, rows);
+}
+
+function plateRows(plate) {
+  const box = plate.box || {};
+  return [
+    { label: "Character confidence", value: Number(plate.confidence).toFixed(2) },
+    { label: "Detector confidence", value: Number(box.confidence).toFixed(2) },
+    { label: "Position", value: box.x + ", " + box.y },
+    { label: "Size", value: box.width + " × " + box.height + " px" },
+  ];
+}
+
+function timingRows(view) {
+  return [
+    { label: "Detector time", value: milliseconds(view.detector_ms), timing: true },
+    { label: "Plate read time", value: milliseconds(view.reader_ms), timing: true },
+  ];
+}
+
+function frameRows(view) {
+  return [
+    { label: "Stream", value: view.stream || "" },
+    { label: "Frame", value: view.width + " × " + view.height },
+    { label: "Time", value: clock(view.time) },
+  ];
+}
+
+function milliseconds(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return "";
+  }
+  return number.toFixed(1) + " ms";
+}
+
+function clock(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value || "";
+  }
+  return date.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function fillMeta(target, rows) {
+  target.replaceChildren();
+  for (const row of rows) {
+    if (!row.value) {
+      continue;
+    }
+    const label = document.createElement("dt");
+    const value = document.createElement("dd");
+    label.textContent = row.label;
+    value.textContent = row.value;
+    if (row.timing) {
+      label.className = "timing";
+      value.className = "timing";
+    }
+    target.append(label, value);
+  }
+}
+
+function drawBoxes(layer, plates, width, height) {
+  layer.replaceChildren();
+  if (!width || !height) {
+    return;
+  }
+  for (const plate of plates) {
+    const box = plate.box;
+    if (!box || box.width <= 0 || box.height <= 0) {
+      continue;
+    }
+    const node = document.createElement("div");
+    node.className = "box";
+    node.style.left = (100 * box.x / width) + "%";
+    node.style.top = (100 * box.y / height) + "%";
+    node.style.width = (100 * box.width / width) + "%";
+    node.style.height = (100 * box.height / height) + "%";
+    node.title = plate.text || "";
+    layer.appendChild(node);
+  }
+}
+
+function renderHistory(items, limit) {
+  const rows = [];
+  for (let index = 0; index < limit; index += 1) {
+    rows.push(items && items[index] ? items[index] : null);
+  }
+  const token = rows.map((item) => item ? item.id + ":" + item.text : "-").join(",");
+  if (token === historyToken && page.history.childElementCount === limit) {
+    return;
+  }
+  historyToken = token;
+  page.history.replaceChildren();
+  for (const item of rows) {
+    page.history.appendChild(historyCard(item));
+  }
+}
+
+function historyCard(item) {
+  const card = document.createElement("article");
+  const frame = document.createElement("div");
+  frame.className = "frame";
+  const image = document.createElement("img");
+  image.alt = "";
+  const title = document.createElement("p");
+  title.className = "hist-plate";
+  const meta = document.createElement("p");
+  meta.className = "hist-meta";
+  if (!item) {
+    frame.classList.add("waiting");
+    title.textContent = "—";
+    meta.textContent = "waiting";
+  } else {
+    image.src = item.image;
+    image.alt = item.text || "plate";
+    title.textContent = item.text || "—";
+    const box = item.box || {};
+    const parts = [
+      "Character confidence " + Number(item.confidence).toFixed(2),
+      "Detector confidence " + Number(box.confidence).toFixed(2),
+    ];
+    const detector = milliseconds(item.detector_ms);
+    const reader = milliseconds(item.reader_ms);
+    if (detector) {
+      parts.push("Detector time " + detector);
+    }
+    if (reader) {
+      parts.push("Plate read time " + reader);
+    }
+    meta.textContent = parts.join(" · ");
+  }
+  frame.append(image);
+  card.append(frame, title, meta);
+  return card;
+}
+
+tick();
+setInterval(tick, 500);
+</script>
+</body>
+</html>

@@ -11,7 +11,7 @@ The flashed board checked for this scaffold is `imx95-15x15-lpddr4x-frdm` runnin
 ```text
 src/anpr/                     application package
 configs/config.example.json   board config; videoCapture RTSP source
-deploy/                       systemd unit and udev rule
+deploy/                       systemd units and udev rule
 datasets/calibration/         INT8 calibration frames (images are gitignored)
 tools/host/export_int8.py     host-side INT8 export preflight
 tools/host/run-rtsp-server.sh publish MP4 files for the board
@@ -38,10 +38,20 @@ python3 -m venv .venv
 ```bash
 python -m anpr check-config --config configs/config.example.json
 python -m anpr run --config configs/config.example.json
+python -m anpr web --config configs/config.example.json
 python -m anpr probe-npu
 ```
 
-`run` stays up and reads each enabled stream until SIGTERM. The sample stream is `rtsp://10.0.0.117:8554/videoCapture`.
+`run` stays up and reads each enabled stream until SIGTERM. It also publishes the latest JPEG and plate JSON on the Unix socket in `service.api_socket`. The sample stream is `rtsp://10.0.0.117:8554/videoCapture`.
+
+`web` is a separate process. Open `http://<board>:8080/` for the live frame and the last four plates. It keeps serving if `run` is down.
+
+```bash
+journalctl -u anpr -u anpr-web -f
+curl --unix-socket /run/anpr/api.sock http://localhost/v1/latest
+```
+
+Set `ANPR_LOG_LEVEL=DEBUG` on either unit for one journal line per request.
 
 Publish MP4 files from this PC, then install the same JSON on the board as `/etc/anpr/config.json`:
 

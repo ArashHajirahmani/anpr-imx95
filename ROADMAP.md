@@ -29,6 +29,10 @@ Run one capture thread per enabled stream, drop stale frames, and detect plates 
 
 Add a plate recognizer and charset. Export that model with its own calibration set through the same INT8 preflight.
 
+## Browser
+
+`anpr run` serves plate JSON and JPEG frames on a Unix socket. `anpr web` is a separate process and shows the latest frame, the plate, and the last four recognitions.
+
 ## Phase 5 — Install
 
-Install `/opt/anpr`, `/etc/anpr/config.json`, the `anpr` user, the udev rule, and `anpr.service`. A `meta-anpr` Yocto layer comes only after that install is known.
+Install `/opt/anpr`, `/etc/anpr/config.json`, the `anpr` user, the udev rule, `anpr.service`, and `anpr-web.service`. A `meta-anpr` Yocto layer comes only after that install is known.

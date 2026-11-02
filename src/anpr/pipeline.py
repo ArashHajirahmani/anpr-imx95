@@ -9,7 +9,7 @@ from pathlib import Path
 
 from anpr.capture import pipeline_for_stream
 from anpr.config import AppConfig
-from anpr.plates import accept_plate
+from anpr.results import FrameTiming, ResultStore, publish_reads
 from anpr.types import Frame
 
 logger = logging.getLogger("anpr.pipeline")
@@ -55,6 +55,9 @@ def run_streams(
     config: AppConfig,
     stop: threading.Event,
     open_pipeline: Callable[[str], object] | None = None,
+    *,
+    results: ResultStore | None = None,
+    reader: object | None = None,
 ) -> WiredPipeline:
     """Capture until stop is set. Each thread publishes only its latest frame."""
     if open_pipeline is None:
@@ -73,8 +76,8 @@ def run_streams(
         )
         for name, description in wired.pipelines.items()
     ]
-    reader = _load_reader(config)
-    if reader is not None:
+    plate_reader = reader if reader is not None else _load_reader(config)
+    if plate_reader is not None:
         threads.append(
             threading.Thread(
                 target=_infer_loop,
@@ -82,9 +85,11 @@ def run_streams(
                 args=(
                     wired.slots,
                     stop,
-                    reader,
+                    plate_reader,
                     config.service.inference_fps_limit,
                     config.recognizer.min_confidence,
+                    results,
+                    config.service.jpeg_quality,
                 ),
                 daemon=True,
             )
@@ -162,21 +167,45 @@ def _load_reader(config: AppConfig) -> object | None:
     if not config.recognizer.enabled:
         logger.info("plate reader disabled")
         return None
-    if not config.detector.path or not config.recognizer.path:
-        logger.error("plate reader needs detector.path and recognizer.path")
+    if config.service.runtime == "npu":
+        detector_path = config.detector.npu_path
+        ocr_path = config.recognizer.npu_path
+    else:
+        detector_path = config.detector.path
+        ocr_path = config.recognizer.path
+    if not detector_path or not ocr_path:
+        logger.error("plate reader needs model paths for runtime %s", config.service.runtime)
         return None
     try:
         from anpr.recognize import PlateReader
 
         return PlateReader(
-            detector_path=Path(config.detector.path),
-            ocr_path=Path(config.recognizer.path),
+            detector_path=Path(detector_path),
+            ocr_path=Path(ocr_path),
             alphabet=config.recognizer.charset,
             threshold=config.detector.conf_threshold,
+            runtime=config.service.runtime,
         )
     except Exception:
         logger.exception("plate reader failed to load")
         return None
+
+
+def _frame_timing(stats: object) -> FrameTiming | None:
+    detector_ms = getattr(stats, "det_ms", None)
+    reader_ms = getattr(stats, "ocr_ms", None)
+    if isinstance(detector_ms, bool) or isinstance(reader_ms, bool):
+        return None
+    if not isinstance(detector_ms, int | float) or not isinstance(reader_ms, int | float):
+        return None
+    return FrameTiming(float(detector_ms), float(reader_ms))
+
+
+def _reader_outcome(name: str, outcome: object) -> tuple[list[object] | None, object]:
+    if not isinstance(outcome, tuple) or len(outcome) != 2 or not isinstance(outcome[0], list):
+        logger.warning("plate reader for %s returned %s", name, type(outcome).__name__)
+        return None, None
+    return outcome
 
 
 def _infer_loop(
@@ -185,10 +214,12 @@ def _infer_loop(
     reader: object,
     fps_limit: int,
     min_confidence: float,
+    results: ResultStore | None,
+    jpeg_quality: int,
 ) -> None:
     interval = 1.0 / fps_limit
     next_tick = 0.0
-    last_text: dict[str, str] = {}
+    last_texts: dict[str, set[str]] = {}
     while not stop.is_set():
         now = time.monotonic()
         if now < next_tick:
@@ -201,22 +232,39 @@ def _infer_loop(
             if frame is None or frame.width <= 0 or frame.height <= 0:
                 continue
             try:
-                reads = reader.read(frame)
+                outcome = reader.read(frame)
             except Exception as exc:
                 logger.warning("plate read failed for %s: %s", name, exc)
                 continue
-            for read in reads:
-                if not accept_plate(read.text, read.confidence, min_confidence):
-                    continue
-                if last_text.get(name) == read.text:
-                    continue
-                last_text[name] = read.text
+            reads, stats = _reader_outcome(name, outcome)
+            if reads is None or stats is None:
+                continue
+            try:
+                fresh = publish_reads(
+                    results,
+                    frame,
+                    reads,
+                    min_confidence=min_confidence,
+                    jpeg_quality=jpeg_quality,
+                    last_texts=last_texts,
+                    timing=_frame_timing(stats),
+                )
+            except Exception:
+                logger.exception("plate publish failed for %s", name)
+                continue
+            for read in fresh:
                 box = read.box
                 logger.info(
-                    "plate %s text=%s confidence=%.2f box=%d,%d %dx%d det=%.2f",
+                    "plate %s text=%s confidence=%.2f runtime=%s det_ms=%.1f ocr_ms=%.1f "
+                    "cpu=%.0f rss_mb=%.0f box=%d,%d %dx%d det=%.2f",
                     name,
                     read.text,
                     read.confidence,
+                    stats.runtime,
+                    stats.det_ms,
+                    stats.ocr_ms,
+                    stats.cpu_percent,
+                    stats.rss_mb,
                     box.x,
                     box.y,
                     box.width,

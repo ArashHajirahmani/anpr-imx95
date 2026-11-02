@@ -22,4 +22,4 @@ Install paths used later: `/opt/anpr` and `/etc/anpr/config.json`. Device paths 
 
 ## Tracking
 
-Phase status is in [ROADMAP.md](ROADMAP.md). Neutron inference and the board install are still ahead. `anpr run` already captures the configured RTSP stream.
+Phase status is in [ROADMAP.md](ROADMAP.md). Neutron inference and the board install are still ahead. `anpr run` captures the configured RTSP stream and publishes the latest JPEG plus plate JSON on `service.api_socket`. `anpr web` is a separate process that serves the browser page from that socket.

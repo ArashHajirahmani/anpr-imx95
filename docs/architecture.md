@@ -3,10 +3,35 @@
 Each enabled stream has one capture thread and one latest-frame slot. A single inference thread owns the `tflite_runtime` interpreter. The interpreter is not shared across threads.
 
 ```text
-stream thread -> latest frame slot -> inference thread -> detector -> recognizer -> journal
+stream thread -> latest frame slot -> inference thread -> detector -> recognizer
+recognizer -> journal
+recognizer -> result store -> HTTP on a Unix socket -> anpr web -> browser
 ```
 
-When `recognizer.enabled` is true, one thread runs the ONNX plate detector and OCR on the latest frame. The journal gets a line only when the mean character probability is at least `recognizer.min_confidence` (0.07). That floor is the accurate operating point of this OCR model; chance over its 37 symbols is about 0.027. Repeated copies of the same text are not logged again. The weights run on CPU through ONNX Runtime.
+When `recognizer.enabled` is true, one thread runs the plate detector and OCR on the latest frame. `service.runtime` is `cpu` for the float ONNX models or `npu` for the INT8 models on ONNX Runtime's Neutron provider. The journal line includes `runtime`, `det_ms`, `ocr_ms`, `cpu`, and `rss_mb`. A plate is logged only when the mean character probability is at least `recognizer.min_confidence` (0.07). Repeated copies of the same text are not logged again. A frame with no accepted plate does not clear that memory, so the same text is not logged again after a miss.
+
+## Result API and web client
+
+`anpr run` stores the latest JPEG and the plates found on that frame. Accepted plates also fill a history of `service.history_limit` events (4 in the sample). The image stays binary. Metadata is JSON. Both are HTTP resources on the Unix socket `service.api_socket` (`/run/anpr/api.sock`). The recognition process does not listen on TCP.
+
+```text
+GET /health
+GET /v1/latest
+GET /v1/latest.jpg
+GET /v1/history
+GET /v1/history/<id>.jpg
+```
+
+A plate object has `text`, `confidence`, and `box` (`x`, `y`, `width`, `height`, `confidence`). The box is in pixels of that JPEG. Before the first frame, `/v1/latest` returns 503.
+
+```bash
+curl --unix-socket /run/anpr/api.sock http://localhost/v1/latest
+curl --unix-socket /run/anpr/api.sock http://localhost/v1/latest.jpg -o latest.jpg
+```
+
+`anpr web` is a separate process, installed as `anpr-web.service`. It serves one page on `web.listen_host` and `web.listen_port` (`0.0.0.0:8080` in the sample). The left side is the latest frame, the plate in large type, and the other fields in small type. A green box is placed from the box pixels. The right side is the last four plates, each cropped to its box. The page keeps serving when the socket is down and shows the last good frame with the error. Journal lines cover bind, reachability, each new plate, and a status line every 30 seconds. `ANPR_LOG_LEVEL=DEBUG` adds one line per API request and per poll.
+
+`anpr.service` sets `RuntimeDirectory=anpr`, which creates `/run/anpr` for the socket.
 
 ## Runtime on the board
 
@@ -24,7 +49,7 @@ Checked on `root@10.0.0.165` with `imx-image-full`:
 
 Primary path is PyGObject (`python3-pygobject` 3.56.1, GStreamer 1.28.1). `capture.py` imports `gi` only when a caller opens a pipeline. `anpr run` keeps one thread per enabled stream and republishes the latest frame until SIGTERM.
 
-The bench publisher is `tools/host/run-rtsp-server.sh`. It serves H.264 MP4 files on `rtsp://<pc-address>:8554/videoCapture`. From this PC that address is `10.0.0.117`. The board opens it with `rtspsrc` over TCP. Hardware decode is `v4l2h264dec` in `libgstvideo4linux2.so` (gst-plugins-good, Wave6 firmware `firmware-imx-vpu-wave`). Colorspace conversion uses `imxvideoconvert_g2d`.
+The bench publisher is `tools/host/run-rtsp-server.sh`. MediaMTX listens on `0.0.0.0:8554` and ffmpeg publishes each H.264 file to `rtsp://<pc-address>:8554/videoCapture`. From this PC that address is `10.0.0.117`. The board opens it with `rtspsrc` over TCP. Hardware decode is `v4l2h264dec` in `libgstvideo4linux2.so` (gst-plugins-good, Wave6 firmware `firmware-imx-vpu-wave`). Colorspace conversion uses `imxvideoconvert_g2d`.
 
 ```text
 rtspsrc location=rtsp://10.0.0.117:8554/videoCapture latency=100 protocols=tcp ! rtph264depay ! h264parse ! v4l2h264dec ! imxvideoconvert_g2d ! video/x-raw,format=RGB ! videoconvert ! video/x-raw,format=BGR ! appsink name=anpr drop=true max-buffers=1 sync=false
@@ -40,4 +65,4 @@ cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
 
 Sample config: `configs/config.example.json`. On the board the service reads `/etc/anpr/config.json`. Device paths and thresholds live only in that file.
 
-`deploy/systemd/anpr.service` runs as user `anpr` in group `video`. `deploy/udev/99-anpr-neutron.rules` keeps `/dev/neutron0` on group `video`.
+`deploy/systemd/anpr.service` and `deploy/systemd/anpr-web.service` run as user `anpr` in group `video`. `deploy/udev/99-anpr-neutron.rules` keeps `/dev/neutron0` on group `video`. The web unit does not stop when recognition is down.

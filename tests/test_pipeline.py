@@ -1,10 +1,14 @@
 import threading
 from pathlib import Path
 
+import pytest
+
 from anpr.capture import pipeline_for_stream, rtp_pipeline, rtsp_pipeline
 from anpr.config import StreamConfig, load_config
 from anpr.pipeline import run_streams, wire
-from anpr.types import Frame
+from anpr.recognize import InferenceStats, PlateRead
+from anpr.results import ResultStore
+from anpr.types import Frame, PlateBox
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "configs" / "config.example.json"
 ROOT = Path(__file__).resolve().parents[1]
@@ -78,6 +82,54 @@ def test_stopped_service_does_not_open_capture() -> None:
     stop.set()
     run_streams(load_config(EXAMPLE), stop, opened.append)
     assert opened == []
+
+
+def test_inference_publishes_a_plate_snapshot() -> None:
+    pytest.importorskip("cv2")
+    store = ResultStore(4)
+    stop = threading.Event()
+    saw = threading.Event()
+    closed: list[bool] = []
+
+    class _Reader:
+        def read(self, frame: Frame) -> tuple[list[PlateRead], InferenceStats]:
+            saw.set()
+            plate = PlateRead("ABC123", 0.91, PlateBox(1, 1, 2, 2, 0.5))
+            return [plate], InferenceStats("cpu", 1.0, 2.0, 3.0, 4.0)
+
+    class _Capture:
+        def __init__(self) -> None:
+            self._sent = False
+
+        def pull(self, timeout_ns: int = 0) -> tuple[bytes, int, int, int] | None:
+            if not self._sent:
+                self._sent = True
+                return bytes(4 * 4 * 3), 10, 4, 4
+            saw.wait(3)
+            stop.set()
+            return None
+
+        def close(self) -> None:
+            closed.append(True)
+
+    wired = run_streams(
+        load_config(EXAMPLE),
+        stop,
+        lambda _description: _Capture(),
+        results=store,
+        reader=_Reader(),
+    )
+    latest = store.latest()
+    assert latest is not None
+    assert latest.stream == "videoCapture"
+    assert latest.width == 4
+    assert latest.height == 4
+    assert latest.jpeg.startswith(b"\xff\xd8")
+    assert latest.plates[0].text == "ABC123"
+    assert latest.plates[0].box.x == 1
+    assert [item.text for item in store.history()] == ["ABC123"]
+    assert closed == [True]
+    assert wired.slots["videoCapture"].take() is None
 
 
 def test_publisher_script_names_the_video_capture_path() -> None:

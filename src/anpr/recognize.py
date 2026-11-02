@@ -1,9 +1,11 @@
 """ONNX Runtime plate detector and OCR.
 
-These weights are not compiled for Neutron. The board runs them on CPU.
+`cpu` uses the float models. `npu` uses the INT8 models and the Neutron provider.
 """
 
 import logging
+import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +30,15 @@ class PlateRead:
     box: PlateBox
 
 
+@dataclass(frozen=True)
+class InferenceStats:
+    runtime: str
+    det_ms: float
+    ocr_ms: float
+    cpu_percent: float
+    rss_mb: float
+
+
 class PlateReader:
     def __init__(
         self,
@@ -35,47 +46,65 @@ class PlateReader:
         ocr_path: Path,
         alphabet: str = PLATE_ALPHABET,
         threshold: float = 0.25,
+        runtime: str = "cpu",
     ) -> None:
         import onnxruntime as ort
 
+        if runtime not in {"cpu", "npu"}:
+            raise ValueError(f"runtime must be cpu or npu, got {runtime}")
         if not detector_path.is_file():
             raise FileNotFoundError(detector_path)
         if not ocr_path.is_file():
             raise FileNotFoundError(ocr_path)
         self._alphabet = alphabet or PLATE_ALPHABET
         self._threshold = threshold
+        self._runtime = runtime
         options = ort.SessionOptions()
         options.intra_op_num_threads = 2
+        providers: list[str | tuple[str, dict[str, bool]]]
+        if runtime == "npu":
+            providers = [
+                ("NeutronExecutionProvider", {"neutron_op_only": False}),
+                "CPUExecutionProvider",
+            ]
+        else:
+            providers = ["CPUExecutionProvider"]
         self._detector = ort.InferenceSession(
             str(detector_path),
             sess_options=options,
-            providers=["CPUExecutionProvider"],
+            providers=providers,
         )
         self._ocr = ort.InferenceSession(
             str(ocr_path),
             sess_options=options,
-            providers=["CPUExecutionProvider"],
+            providers=providers,
         )
         self._detector_input = self._detector.get_inputs()[0].name
         self._ocr_input = self._ocr.get_inputs()[0].name
         logger.info(
-            "plate reader loaded on onnxruntime CPU detector=%s ocr=%s",
+            "plate reader runtime=%s providers=%s detector=%s ocr=%s",
+            runtime,
+            self._detector.get_providers(),
             detector_path,
             ocr_path,
         )
 
-    def read(self, frame: Frame) -> list[PlateRead]:
+    def read(self, frame: Frame) -> tuple[list[PlateRead], InferenceStats]:
         import numpy as np
 
+        empty = InferenceStats(self._runtime, 0.0, 0.0, 0.0, _rss_mb())
         if frame.width <= 0 or frame.height <= 0:
-            return []
+            return [], empty
         image = np.frombuffer(frame.data, dtype=np.uint8)
         expected = frame.width * frame.height * 3
         if image.size < expected:
-            return []
+            return [], empty
         image = image[:expected].reshape(frame.height, frame.width, 3)
+        cpu_before = _cpu_seconds()
+        started = time.perf_counter()
         blob, scale, left, top = _letterbox(image, DETECTOR_SIZE)
         raw = self._detector.run(None, {self._detector_input: blob})[0]
+        detected = time.perf_counter()
         boxes = _boxes_from_yolo(raw, self._threshold, scale, left, top, frame.width, frame.height)
         reads: list[PlateRead] = []
         for x1, y1, x2, y2, confidence in boxes:
@@ -90,7 +119,16 @@ class PlateReader:
                     box=PlateBox(x1, y1, x2 - x1, y2 - y1, confidence),
                 )
             )
-        return reads
+        finished = time.perf_counter()
+        wall = max(finished - started, 1e-6)
+        stats = InferenceStats(
+            runtime=self._runtime,
+            det_ms=(detected - started) * 1000,
+            ocr_ms=(finished - detected) * 1000,
+            cpu_percent=(_cpu_seconds() - cpu_before) / wall * 100,
+            rss_mb=_rss_mb(),
+        )
+        return reads, stats
 
     def _read_crop(self, bgr: object) -> tuple[str, float]:
         import cv2
@@ -131,7 +169,9 @@ def _boxes_from_yolo(
     image_width: int,
     image_height: int,
 ) -> list[tuple[int, int, int, int, float]]:
-    prediction = raw[0].T
+    prediction = raw[0]
+    if prediction.shape[0] < prediction.shape[-1]:
+        prediction = prediction.T
     selected: list[tuple[float, float, float, float, float]] = []
     for cx, cy, width, height, confidence in prediction:
         if float(confidence) < threshold:
@@ -150,3 +190,22 @@ def _boxes_from_yolo(
         selected.append((x1, y1, x2, y2, float(confidence)))
     kept = nms(selected)
     return [(int(x1), int(y1), int(x2), int(y2), confidence) for x1, y1, x2, y2, confidence in kept]
+
+
+def _cpu_seconds() -> float:
+    try:
+        parts = Path("/proc/self/stat").read_text(encoding="utf-8").split()
+        ticks = os.sysconf("SC_CLK_TCK")
+        return (int(parts[13]) + int(parts[14])) / ticks
+    except (OSError, IndexError, ValueError):
+        return 0.0
+
+
+def _rss_mb() -> float:
+    try:
+        for line in Path("/proc/self/status").read_text(encoding="utf-8").splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) / 1024
+    except (OSError, IndexError, ValueError):
+        return 0.0
+    return 0.0

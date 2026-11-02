@@ -38,4 +38,6 @@ Stop when the converter log leaves ops on the CPU through XNNPACK. Do not copy t
 
 ## Service install
 
-Templates live in `deploy/systemd/anpr.service` and `deploy/udev/99-anpr-neutron.rules`. The process user is `anpr` in group `video`. Config path is `/etc/anpr/config.json`.
+Templates live in `deploy/systemd/anpr.service`, `deploy/systemd/anpr-web.service`, and `deploy/udev/99-anpr-neutron.rules`. The process user is `anpr` in group `video`. Config path is `/etc/anpr/config.json`.
+
+`anpr.service` publishes plate JSON and JPEG frames on the Unix socket `service.api_socket` (`/run/anpr/api.sock` in the sample). `RuntimeDirectory=anpr` creates that directory. `anpr-web.service` serves the browser page and keeps running when recognition is down.

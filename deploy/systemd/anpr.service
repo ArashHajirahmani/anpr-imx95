@@ -8,6 +8,9 @@ User=anpr
 Group=video
 WorkingDirectory=/opt/anpr
 Environment=PYTHONPATH=/opt/anpr/src
+# Environment=ANPR_LOG_LEVEL=DEBUG
+RuntimeDirectory=anpr
+RuntimeDirectoryMode=0755
 ExecStart=/usr/bin/python3 -m anpr run --config /etc/anpr/config.json
 Restart=on-failure
 RestartSec=5

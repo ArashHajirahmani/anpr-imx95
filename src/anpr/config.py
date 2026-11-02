@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 STREAM_TYPES = frozenset({"rtsp", "rtp", "v4l2"})
+RUNTIMES = frozenset({"cpu", "npu"})
 
 
 class ConfigError(ValueError):
@@ -23,6 +24,7 @@ class StreamConfig:
 @dataclass(frozen=True)
 class DetectorConfig:
     path: str
+    npu_path: str
     delegate_path: str
     conf_threshold: float
     input_width: int
@@ -33,6 +35,7 @@ class DetectorConfig:
 class RecognizerConfig:
     enabled: bool
     path: str
+    npu_path: str
     delegate_path: str
     charset: str
     min_confidence: float
@@ -40,7 +43,18 @@ class RecognizerConfig:
 
 @dataclass(frozen=True)
 class ServiceConfig:
+    runtime: str
     inference_fps_limit: int
+    api_socket: str
+    jpeg_quality: int
+    history_limit: int
+
+
+@dataclass(frozen=True)
+class WebConfig:
+    listen_host: str
+    listen_port: int
+    poll_seconds: float
 
 
 @dataclass(frozen=True)
@@ -49,6 +63,7 @@ class AppConfig:
     detector: DetectorConfig
     recognizer: RecognizerConfig
     service: ServiceConfig
+    web: WebConfig
 
     def enabled_streams(self) -> tuple[StreamConfig, ...]:
         return tuple(stream for stream in self.streams if stream.enabled)
@@ -70,6 +85,7 @@ def load_config(path: Path) -> AppConfig:
         detector=_detector(payload),
         recognizer=_recognizer(payload),
         service=_service(payload),
+        web=_web(payload),
     )
 
 
@@ -105,6 +121,7 @@ def _detector(payload: dict[str, object]) -> DetectorConfig:
         raise ConfigError("detector.conf_threshold must be between 0 and 1")
     return DetectorConfig(
         path=_string(body.get("path"), "detector.path"),
+        npu_path=_string(body.get("npu_path", ""), "detector.npu_path"),
         delegate_path=_string(body.get("delegate_path"), "detector.delegate_path"),
         conf_threshold=float(threshold),
         input_width=_positive_int(body.get("input_width"), "detector.input_width"),
@@ -122,6 +139,7 @@ def _recognizer(payload: dict[str, object]) -> RecognizerConfig:
     return RecognizerConfig(
         enabled=_bool(body.get("enabled"), "recognizer.enabled"),
         path=_string(body.get("path"), "recognizer.path"),
+        npu_path=_string(body.get("npu_path", ""), "recognizer.npu_path"),
         delegate_path=_string(body.get("delegate_path"), "recognizer.delegate_path"),
         charset=_string(body.get("charset"), "recognizer.charset"),
         min_confidence=float(minimum),
@@ -130,11 +148,27 @@ def _recognizer(payload: dict[str, object]) -> RecognizerConfig:
 
 def _service(payload: dict[str, object]) -> ServiceConfig:
     body = _object(payload.get("service"), "service")
+    runtime = body.get("runtime", "cpu")
+    if not isinstance(runtime, str) or runtime not in RUNTIMES:
+        raise ConfigError("service.runtime must be cpu or npu")
     return ServiceConfig(
+        runtime=runtime,
         inference_fps_limit=_positive_int(
             body.get("inference_fps_limit"),
             "service.inference_fps_limit",
-        )
+        ),
+        api_socket=_socket_path(body.get("api_socket"), "service.api_socket"),
+        jpeg_quality=_bounded_int(body.get("jpeg_quality"), "service.jpeg_quality", 1, 100),
+        history_limit=_positive_int(body.get("history_limit"), "service.history_limit"),
+    )
+
+
+def _web(payload: dict[str, object]) -> WebConfig:
+    body = _object(payload.get("web"), "web")
+    return WebConfig(
+        listen_host=_nonempty(body.get("listen_host"), "web.listen_host"),
+        listen_port=_bounded_int(body.get("listen_port"), "web.listen_port", 1, 65535),
+        poll_seconds=_positive_number(body.get("poll_seconds"), "web.poll_seconds"),
     )
 
 
@@ -160,3 +194,31 @@ def _positive_int(value: object, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ConfigError(f"{label} must be a positive integer")
     return value
+
+
+def _bounded_int(value: object, label: str, low: int, high: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigError(f"{label} must be an integer")
+    if not low <= value <= high:
+        raise ConfigError(f"{label} must be between {low} and {high}")
+    return value
+
+
+def _positive_number(value: object, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+        raise ConfigError(f"{label} must be a positive number")
+    return float(value)
+
+
+def _socket_path(value: object, label: str) -> str:
+    text = _string(value, label)
+    if not text.startswith("/") or text.endswith("/"):
+        raise ConfigError(f"{label} must be an absolute path")
+    return text
+
+
+def _nonempty(value: object, label: str) -> str:
+    text = _string(value, label)
+    if not text:
+        raise ConfigError(f"{label} must not be empty")
+    return text

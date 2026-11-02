@@ -27,7 +27,7 @@ Primary path is PyGObject (`python3-pygobject` 3.56.1, GStreamer 1.28.1). `captu
 The bench publisher is `tools/host/run-rtsp-server.sh`. It serves H.264 MP4 files on `rtsp://<pc-address>:8554/videoCapture`. From this PC that address is `10.0.0.117`. The board opens it with `rtspsrc` over TCP. Hardware decode is `v4l2h264dec` in `libgstvideo4linux2.so` (gst-plugins-good, Wave6 firmware `firmware-imx-vpu-wave`). Colorspace conversion uses `imxvideoconvert_g2d`.
 
 ```text
-rtspsrc location=rtsp://10.0.0.117:8554/videoCapture latency=100 protocols=tcp ! rtph264depay ! h264parse ! v4l2h264dec ! imxvideoconvert_g2d ! video/x-raw,format=BGR ! appsink name=anpr drop=true max-buffers=1 sync=false
+rtspsrc location=rtsp://10.0.0.117:8554/videoCapture latency=100 protocols=tcp ! rtph264depay ! h264parse ! v4l2h264dec ! imxvideoconvert_g2d ! video/x-raw,format=RGB ! videoconvert ! video/x-raw,format=BGR ! appsink name=anpr drop=true max-buffers=1 sync=false
 ```
 
 A raw RTP listener remains available for `type: "rtp"`. OpenCV 4.13.0.imx is built with GStreamer (`cv2.CAP_GSTREAMER`) if the appsink path has to be replaced with the same pipeline string:

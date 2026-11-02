@@ -52,9 +52,9 @@ def test_run_streams_publishes_one_frame_and_closes() -> None:
     stop = threading.Event()
 
     class _Fake:
-        def pull(self, timeout_ns: int = 0) -> tuple[bytes, int]:
+        def pull(self, timeout_ns: int = 0) -> tuple[bytes, int, int, int]:
             stop.set()
-            return b"frame", 10
+            return b"frame", 10, 0, 0
 
         def close(self) -> None:
             closed.append(True)

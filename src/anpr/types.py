@@ -8,6 +8,8 @@ class Frame:
     stream_name: str
     data: object
     monotonic_ns: int
+    width: int = 0
+    height: int = 0
 
 
 @dataclass(frozen=True)

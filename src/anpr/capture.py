@@ -12,15 +12,14 @@ logger = logging.getLogger("anpr.capture")
 
 APPSINK = "appsink name=anpr drop=true max-buffers=1 sync=false"
 
-RTSP_PIPELINE = (
-    "rtspsrc location={uri} latency=100 protocols=tcp ! rtph264depay ! "
-    "h264parse ! v4l2h264dec ! imxvideoconvert_g2d ! video/x-raw,format=BGR ! " + APPSINK
+DECODE = (
+    "rtph264depay ! h264parse ! v4l2h264dec ! imxvideoconvert_g2d ! "
+    "video/x-raw,format=RGB ! videoconvert ! video/x-raw,format=BGR ! " + APPSINK
 )
 
-RTP_PIPELINE = (
-    "udpsrc port={port} ! application/x-rtp,encoding-name=H264 ! rtph264depay ! "
-    "h264parse ! v4l2h264dec ! imxvideoconvert_g2d ! video/x-raw,format=BGR ! " + APPSINK
-)
+RTSP_PIPELINE = "rtspsrc location={uri} latency=100 protocols=tcp ! " + DECODE
+
+RTP_PIPELINE = "udpsrc port={port} ! application/x-rtp,encoding-name=H264 ! " + DECODE
 
 V4L2_PIPELINE = "v4l2src device={device} ! videoconvert ! video/x-raw,format=BGR ! " + APPSINK
 
@@ -67,9 +66,8 @@ class GStreamerCapture:
         self._pipeline = pipeline
         self._sink = sink
         pipeline.set_state(Gst.State.PLAYING)
-        logger.info("capture playing")
 
-    def pull(self, timeout_ns: int = 500_000_000) -> tuple[bytes, int] | None:
+    def pull(self, timeout_ns: int = 500_000_000) -> tuple[bytes, int, int, int] | None:
         self._raise_if_stopped()
         sample = self._sink.emit("try-pull-sample", timeout_ns)
         if sample is None:
@@ -84,7 +82,10 @@ class GStreamerCapture:
             payload = bytes(info.data)
         finally:
             buffer.unmap(info)
-        return payload, buffer.pts
+        structure = sample.get_caps().get_structure(0)
+        _ok_width, width = structure.get_int("width")
+        _ok_height, height = structure.get_int("height")
+        return payload, buffer.pts, int(width), int(height)
 
     def _raise_if_stopped(self) -> None:
         bus = self._pipeline.get_bus()

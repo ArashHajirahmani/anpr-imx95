@@ -11,6 +11,7 @@ from anpr.types import Frame
 
 logger = logging.getLogger("anpr.pipeline")
 _OPEN_RETRY_SECONDS = 0.5
+_MAX_RETRY_SECONDS = 5.0
 
 
 class LatestFrameSlot:
@@ -89,27 +90,50 @@ def _capture_loop(
     open_pipeline: Callable[[str], object],
 ) -> None:
     logged_frame = False
+    reported_failure = False
+    retry_seconds = _OPEN_RETRY_SECONDS
     while not stop.is_set():
         try:
             capture = open_pipeline(description)
-        except Exception:
-            logger.exception("capture open failed for %s", name)
-            if stop.wait(_OPEN_RETRY_SECONDS):
-                return
+        except Exception as exc:
+            reported_failure, retry_seconds = _capture_failed(
+                name, "open", exc, reported_failure, retry_seconds, stop
+            )
             continue
+        read_error: Exception | None = None
         try:
             while not stop.is_set():
                 pulled = capture.pull()
                 if pulled is None:
                     continue
-                payload, timestamp = pulled
-                slot.publish(Frame(name, payload, int(timestamp)))
-                if not logged_frame:
+                payload, timestamp, width, height = pulled
+                slot.publish(Frame(name, payload, int(timestamp), int(width), int(height)))
+                if not logged_frame or reported_failure:
                     logger.info("stream %s received a frame (%d bytes)", name, len(payload))
-                    logged_frame = True
-        except Exception:
-            logger.exception("capture read failed for %s", name)
+                logged_frame = True
+                reported_failure = False
+                retry_seconds = _OPEN_RETRY_SECONDS
+        except Exception as exc:
+            read_error = exc
         finally:
             capture.close()
-        if stop.wait(_OPEN_RETRY_SECONDS):
-            return
+        if read_error is not None:
+            reported_failure, retry_seconds = _capture_failed(
+                name, "read", read_error, reported_failure, retry_seconds, stop
+            )
+
+
+def _capture_failed(
+    name: str,
+    action: str,
+    exc: Exception,
+    reported: bool,
+    retry_seconds: float,
+    stop: threading.Event,
+) -> tuple[bool, float]:
+    """Log a capture failure once, then wait longer between quiet retries."""
+    if not reported:
+        logger.warning("capture %s failed for %s: %s", action, name, exc)
+    if stop.wait(retry_seconds):
+        return True, retry_seconds
+    return True, min(retry_seconds * 2, _MAX_RETRY_SECONDS)

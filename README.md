@@ -59,4 +59,4 @@ Publish MP4 files from this PC, then install the same JSON on the board as `/etc
 tools/host/run-rtsp-server.sh /path/to/videos
 ```
 
-MediaMTX is not in git. Set `MEDIAMTX_BIN` or place the `mediamtx` binary next to the script. The script prints the board URL from this PC's current address. Video tracks must be H.264.
+MediaMTX is not in git. Put the executable at `tools/host/mediamtx`, next to `tools/host/run-rtsp-server.sh`. The other release files (`mediamtx.yml`, `LICENSE`, `auto.crt`, `auto.key`) can stay in that directory; they are gitignored. `MEDIAMTX_BIN` or a `mediamtx` binary on `PATH` also works. The script prints the board URL from this PC's current address. Video tracks must be H.264.

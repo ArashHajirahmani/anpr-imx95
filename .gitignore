@@ -10,4 +10,9 @@ build/
 *.tflite
 *.onnx
 datasets/calibration/images/
+# MediaMTX release, placed next to tools/host/run-rtsp-server.sh
 tools/host/mediamtx
+tools/host/mediamtx.yml
+tools/host/LICENSE
+tools/host/auto.crt
+tools/host/auto.key

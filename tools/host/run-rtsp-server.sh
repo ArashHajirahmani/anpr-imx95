@@ -20,7 +20,11 @@ show_help() {
     echo ""
     echo "REQUIREMENTS:"
     echo "  - ffmpeg on PATH"
-    echo "  - MediaMTX binary, via MEDIAMTX_BIN, ${SCRIPT_DIR}/mediamtx, or PATH"
+    echo "  - MediaMTX executable in this directory, next to this script:"
+    echo "      ${SCRIPT_DIR}/mediamtx"
+    echo "    Other files from the release can sit here too (mediamtx.yml, LICENSE,"
+    echo "    auto.crt, auto.key). They are gitignored. MEDIAMTX_BIN or a mediamtx"
+    echo "    binary on PATH also works."
     echo "  - At least one .mp4 file in the target directory"
     echo "  - Video tracks must be H.264. The board decodes with v4l2h264dec."
     echo ""
@@ -51,7 +55,8 @@ elif [[ -x "$SCRIPT_DIR/mediamtx" ]]; then
 elif command -v mediamtx >/dev/null 2>&1; then
     MEDIAMTX=$(command -v mediamtx)
 else
-    echo "Error: mediamtx binary not found. Set MEDIAMTX_BIN or place it next to this script." >&2
+    echo "Error: mediamtx binary not found." >&2
+    echo "Put the executable at ${SCRIPT_DIR}/mediamtx (this directory), or set MEDIAMTX_BIN." >&2
     exit 1
 fi
 

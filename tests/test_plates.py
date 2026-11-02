@@ -1,4 +1,4 @@
-from anpr.plates import accept_plate, decode_characters, nms, yolo_candidates
+from anpr.plates import accept_plate, decode_characters, nms, ocr_floor, yolo_candidates
 
 
 def test_decode_strips_padding() -> None:
@@ -30,3 +30,6 @@ def test_confidence_floor_matches_accurate_reads() -> None:
     assert accept_plate("777W455", 0.07)
     assert accept_plate("777W455", 0.069) is False
     assert accept_plate("", 0.9) is False
+    assert ocr_floor(0.07, "cpu") == 0.07
+    assert ocr_floor(0.07, "npu") == 0.065
+    assert accept_plate("192XC", 0.0699, ocr_floor(0.07, "npu"))

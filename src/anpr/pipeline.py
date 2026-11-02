@@ -9,6 +9,7 @@ from pathlib import Path
 
 from anpr.capture import pipeline_for_stream
 from anpr.config import AppConfig
+from anpr.plates import ocr_floor
 from anpr.results import FrameTiming, ResultStore, publish_reads
 from anpr.types import Frame
 
@@ -87,7 +88,7 @@ def run_streams(
                     stop,
                     plate_reader,
                     config.service.inference_fps_limit,
-                    config.recognizer.min_confidence,
+                    ocr_floor(config.recognizer.min_confidence, config.service.runtime),
                     results,
                     config.service.jpeg_quality,
                 ),

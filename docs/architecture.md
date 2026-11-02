@@ -8,7 +8,7 @@ recognizer -> journal
 recognizer -> result store -> HTTP on a Unix socket -> anpr web -> browser
 ```
 
-When `recognizer.enabled` is true, one thread runs the plate detector and OCR on the latest frame. `service.runtime` is `cpu` for the float ONNX models or `npu` for the INT8 models on ONNX Runtime's Neutron provider. The journal line includes `runtime`, `det_ms`, `ocr_ms`, `cpu`, and `rss_mb`. A plate is logged only when the mean character probability is at least `recognizer.min_confidence` (0.07). Repeated copies of the same text are not logged again. A frame with no accepted plate does not clear that memory, so the same text is not logged again after a miss.
+When `recognizer.enabled` is true, one thread runs the plate detector and OCR on the latest frame. `service.runtime` is `cpu` for the float ONNX models or `npu` for the INT8 models on ONNX Runtime's Neutron provider. The journal line includes `runtime`, `det_ms`, `ocr_ms`, `cpu`, and `rss_mb`. A plate is logged only when the mean character probability is at least `recognizer.min_confidence` (0.07). The npu path subtracts 0.005, because the INT8 OCR score for the same crop sits just under the float score. Repeated copies of the same text are not logged again. A frame with no accepted plate does not clear that memory, so the same text is not logged again after a miss.
 
 ## Result API and web client
 

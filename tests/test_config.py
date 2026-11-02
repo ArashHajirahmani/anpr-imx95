@@ -15,7 +15,7 @@ def test_example_config_loads() -> None:
     assert config.enabled_streams()[0].name == "videoCapture"
     assert config.enabled_streams()[0].uri == "rtsp://10.0.0.117:8554/videoCapture"
     assert config.detector.path.endswith("plate_detector.onnx")
-    assert config.detector.conf_threshold == 0.25
+    assert config.detector.conf_threshold == 0.7
     assert config.recognizer.enabled is True
     assert config.recognizer.path.endswith("cct_xs_v2_global.onnx")
     assert config.recognizer.min_confidence == 0.07
@@ -78,7 +78,7 @@ def test_rejects_duplicate_stream_names(tmp_path: Path) -> None:
 
 def _write(tmp_path: Path, *, conf_threshold: float = 0.5, stream_type: str = "rtsp") -> Path:
     text = EXAMPLE.read_text(encoding="utf-8")
-    text = text.replace('"conf_threshold": 0.25', f'"conf_threshold": {conf_threshold}')
+    text = text.replace('"conf_threshold": 0.7', f'"conf_threshold": {conf_threshold}')
     text = text.replace('"type": "rtsp"', f'"type": "{stream_type}"', 1)
     path = tmp_path / "config.json"
     path.write_text(text, encoding="utf-8")

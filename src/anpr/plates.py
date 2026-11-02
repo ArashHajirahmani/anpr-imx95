@@ -9,6 +9,8 @@ OCR_HEIGHT = 64
 # Mean per-character probability. Chance over this 37-symbol alphabet is about 0.027.
 # Reads around 0.07 are the ones that match the plate; lower scores are noise.
 MIN_OCR_CONFIDENCE = 0.07
+# The INT8 OCR score for the same crop sits just under the float score.
+INT8_OCR_MARGIN = 0.005
 
 
 def decode_characters(
@@ -31,6 +33,13 @@ def decode_characters(
     if not chars:
         return "", 0.0
     return "".join(chars), sum(confidences) / len(confidences)
+
+
+def ocr_floor(minimum: float, runtime: str) -> float:
+    """Return the accept threshold for this runtime."""
+    if runtime == "npu":
+        return max(0.0, minimum - INT8_OCR_MARGIN)
+    return minimum
 
 
 def accept_plate(text: str, confidence: float, minimum: float = MIN_OCR_CONFIDENCE) -> bool:

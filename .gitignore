@@ -8,5 +8,6 @@ dist/
 build/
 *.pt
 *.tflite
+*.onnx
 datasets/calibration/images/
 tools/host/mediamtx

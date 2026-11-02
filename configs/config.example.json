@@ -16,19 +16,20 @@
     }
   ],
   "detector": {
-    "path": "/opt/anpr/models/plate_detector.tflite",
+    "path": "/opt/anpr/models/plate_detector.onnx",
     "delegate_path": "",
-    "conf_threshold": 0.5,
+    "conf_threshold": 0.25,
     "input_width": 640,
     "input_height": 640
   },
   "recognizer": {
-    "enabled": false,
-    "path": "",
+    "enabled": true,
+    "path": "/opt/anpr/models/cct_xs_v2_global.onnx",
     "delegate_path": "",
-    "charset": ""
+    "charset": "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_",
+    "min_confidence": 0.07
   },
   "service": {
-    "inference_fps_limit": 15
+    "inference_fps_limit": 2
   }
 }

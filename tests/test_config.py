@@ -14,10 +14,12 @@ def test_example_config_loads() -> None:
     assert [stream.name for stream in config.streams] == ["videoCapture", "local_test"]
     assert config.enabled_streams()[0].name == "videoCapture"
     assert config.enabled_streams()[0].uri == "rtsp://10.0.0.117:8554/videoCapture"
-    assert config.detector.delegate_path == ""
-    assert config.detector.conf_threshold == 0.5
-    assert config.recognizer.enabled is False
-    assert config.service.inference_fps_limit == 15
+    assert config.detector.path.endswith("plate_detector.onnx")
+    assert config.detector.conf_threshold == 0.25
+    assert config.recognizer.enabled is True
+    assert config.recognizer.path.endswith("cct_xs_v2_global.onnx")
+    assert config.recognizer.min_confidence == 0.07
+    assert config.service.inference_fps_limit == 2
 
 
 def test_check_config_command() -> None:
@@ -46,7 +48,7 @@ def test_rejects_duplicate_stream_names(tmp_path: Path) -> None:
 
 def _write(tmp_path: Path, *, conf_threshold: float = 0.5, stream_type: str = "rtsp") -> Path:
     text = EXAMPLE.read_text(encoding="utf-8")
-    text = text.replace('"conf_threshold": 0.5', f'"conf_threshold": {conf_threshold}')
+    text = text.replace('"conf_threshold": 0.25', f'"conf_threshold": {conf_threshold}')
     text = text.replace('"type": "rtsp"', f'"type": "{stream_type}"', 1)
     path = tmp_path / "config.json"
     path.write_text(text, encoding="utf-8")

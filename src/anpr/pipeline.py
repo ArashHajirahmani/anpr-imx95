@@ -2,11 +2,14 @@
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from anpr.capture import pipeline_for_stream
 from anpr.config import AppConfig
+from anpr.plates import accept_plate
 from anpr.types import Frame
 
 logger = logging.getLogger("anpr.pipeline")
@@ -70,6 +73,22 @@ def run_streams(
         )
         for name, description in wired.pipelines.items()
     ]
+    reader = _load_reader(config)
+    if reader is not None:
+        threads.append(
+            threading.Thread(
+                target=_infer_loop,
+                name="plate-reader",
+                args=(
+                    wired.slots,
+                    stop,
+                    reader,
+                    config.service.inference_fps_limit,
+                    config.recognizer.min_confidence,
+                ),
+                daemon=True,
+            )
+        )
     for thread in threads:
         thread.start()
     try:
@@ -137,3 +156,70 @@ def _capture_failed(
     if stop.wait(retry_seconds):
         return True, retry_seconds
     return True, min(retry_seconds * 2, _MAX_RETRY_SECONDS)
+
+
+def _load_reader(config: AppConfig) -> object | None:
+    if not config.recognizer.enabled:
+        logger.info("plate reader disabled")
+        return None
+    if not config.detector.path or not config.recognizer.path:
+        logger.error("plate reader needs detector.path and recognizer.path")
+        return None
+    try:
+        from anpr.recognize import PlateReader
+
+        return PlateReader(
+            detector_path=Path(config.detector.path),
+            ocr_path=Path(config.recognizer.path),
+            alphabet=config.recognizer.charset,
+            threshold=config.detector.conf_threshold,
+        )
+    except Exception:
+        logger.exception("plate reader failed to load")
+        return None
+
+
+def _infer_loop(
+    slots: dict[str, LatestFrameSlot],
+    stop: threading.Event,
+    reader: object,
+    fps_limit: int,
+    min_confidence: float,
+) -> None:
+    interval = 1.0 / fps_limit
+    next_tick = 0.0
+    last_text: dict[str, str] = {}
+    while not stop.is_set():
+        now = time.monotonic()
+        if now < next_tick:
+            if stop.wait(next_tick - now):
+                return
+            continue
+        next_tick = now + interval
+        for name, slot in slots.items():
+            frame = slot.take()
+            if frame is None or frame.width <= 0 or frame.height <= 0:
+                continue
+            try:
+                reads = reader.read(frame)
+            except Exception as exc:
+                logger.warning("plate read failed for %s: %s", name, exc)
+                continue
+            for read in reads:
+                if not accept_plate(read.text, read.confidence, min_confidence):
+                    continue
+                if last_text.get(name) == read.text:
+                    continue
+                last_text[name] = read.text
+                box = read.box
+                logger.info(
+                    "plate %s text=%s confidence=%.2f box=%d,%d %dx%d det=%.2f",
+                    name,
+                    read.text,
+                    read.confidence,
+                    box.x,
+                    box.y,
+                    box.width,
+                    box.height,
+                    box.confidence,
+                )

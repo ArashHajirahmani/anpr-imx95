@@ -35,6 +35,7 @@ class RecognizerConfig:
     path: str
     delegate_path: str
     charset: str
+    min_confidence: float
 
 
 @dataclass(frozen=True)
@@ -113,11 +114,17 @@ def _detector(payload: dict[str, object]) -> DetectorConfig:
 
 def _recognizer(payload: dict[str, object]) -> RecognizerConfig:
     body = _object(payload.get("recognizer"), "recognizer")
+    minimum = body.get("min_confidence", 0.07)
+    if isinstance(minimum, bool) or not isinstance(minimum, int | float):
+        raise ConfigError("recognizer.min_confidence must be a number")
+    if not 0.0 <= float(minimum) <= 1.0:
+        raise ConfigError("recognizer.min_confidence must be between 0 and 1")
     return RecognizerConfig(
         enabled=_bool(body.get("enabled"), "recognizer.enabled"),
         path=_string(body.get("path"), "recognizer.path"),
         delegate_path=_string(body.get("delegate_path"), "recognizer.delegate_path"),
         charset=_string(body.get("charset"), "recognizer.charset"),
+        min_confidence=float(minimum),
     )
 
 

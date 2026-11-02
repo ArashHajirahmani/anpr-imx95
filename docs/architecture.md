@@ -6,7 +6,7 @@ Each enabled stream has one capture thread and one latest-frame slot. A single i
 stream thread -> latest frame slot -> inference thread -> detector -> recognizer -> journal
 ```
 
-The recognizer stays off until `recognizer.enabled` is true and a charset and model exist. Stock `yolov8n.pt` is a COCO detector and is only a pipeline smoke model.
+When `recognizer.enabled` is true, one thread runs the ONNX plate detector and OCR on the latest frame. The journal gets a line only when the mean character probability is at least `recognizer.min_confidence` (0.07). That floor is the accurate operating point of this OCR model; chance over its 37 symbols is about 0.027. Repeated copies of the same text are not logged again. The weights run on CPU through ONNX Runtime.
 
 ## Runtime on the board
 

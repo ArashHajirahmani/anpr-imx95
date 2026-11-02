@@ -82,21 +82,60 @@ fi
 
 echo "============================================================"
 echo "Found ${#mp4_files[@]} .mp4 file(s)."
+echo "Listen: 0.0.0.0:${RTSP_PORT}"
 echo "Board URL: rtsp://${BOARD_HOST}:${RTSP_PORT}/${STREAM_PATH}"
 echo "============================================================"
 
-MEDIAMTX_PID=""
-if ! pgrep -x "mediamtx" >/dev/null; then
+# True when :8554 is open on every interface. A 127.0.0.1 listener is not enough.
+rtsp_listens_everywhere() {
+    ss -ltn "sport = :${RTSP_PORT}" | awk 'NR > 1 { print $4 }' | grep -Eq \
+        '(^|[^0-9])(\*|0\.0\.0\.0|\[::\]):'"${RTSP_PORT}"'$'
+}
+
+start_mediamtx() {
+    local config
+    config=$(mktemp)
+    cat >"$config" <<EOF
+rtsp: true
+rtspAddress: 0.0.0.0:${RTSP_PORT}
+rtspTransports: [tcp]
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+      - action: read
+      - action: playback
+paths:
+  all_others:
+EOF
     echo "Starting MediaMTX from $MEDIAMTX (listening on 0.0.0.0:${RTSP_PORT})..."
-    MEDIAMTX_DIR=$(cd "$(dirname "$MEDIAMTX")" && pwd)
-    (
-        cd "$MEDIAMTX_DIR" || exit 1
-        "$MEDIAMTX"
-    ) &
+    "$MEDIAMTX" "$config" &
     MEDIAMTX_PID=$!
     sleep 1
+}
+
+MEDIAMTX_PID=""
+if pgrep -x "mediamtx" >/dev/null && rtsp_listens_everywhere; then
+    echo "MediaMTX is already listening on 0.0.0.0:${RTSP_PORT}."
+elif pgrep -x "mediamtx" >/dev/null; then
+    echo "MediaMTX is not listening on 0.0.0.0:${RTSP_PORT}. Restarting it."
+    pkill -x mediamtx || true
+    sleep 0.5
+    start_mediamtx
 else
-    echo "MediaMTX is already running."
+    start_mediamtx
+fi
+
+if ! rtsp_listens_everywhere; then
+    echo "Error: nothing is listening on 0.0.0.0:${RTSP_PORT}." >&2
+    exit 1
+fi
+
+if pgrep -af ffmpeg | grep -q "${RTSP_PORT}/${STREAM_PATH}"; then
+    echo "Error: ${STREAM_PATH} already has a publisher. Stop that ffmpeg before starting another." >&2
+    exit 1
 fi
 
 cleanup() {
@@ -111,9 +150,11 @@ trap cleanup SIGINT SIGTERM
 
 while true; do
     for file in "${mp4_files[@]}"; do
-        echo "[STREAMING] $file -> rtsp://127.0.0.1:${RTSP_PORT}/${STREAM_PATH}"
-        ffmpeg -hide_banner -loglevel warning -re -i "$file" -c:v copy -an \
-            -f rtsp "rtsp://127.0.0.1:${RTSP_PORT}/${STREAM_PATH}"
+        echo "[STREAMING] $file -> rtsp://${BOARD_HOST}:${RTSP_PORT}/${STREAM_PATH}"
+        if ! ffmpeg -hide_banner -loglevel warning -re -i "$file" -c:v copy -an \
+            -rtsp_transport tcp -f rtsp "rtsp://${BOARD_HOST}:${RTSP_PORT}/${STREAM_PATH}"; then
+            echo "Publish stopped. Retrying ${STREAM_PATH}."
+        fi
         sleep 1
     done
 done

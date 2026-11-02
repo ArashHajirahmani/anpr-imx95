@@ -21,6 +21,9 @@ logger = logging.getLogger("anpr.quantize")
 DETECTOR_SIZE = 640
 OCR_WIDTH = 128
 OCR_HEIGHT = 64
+# Box coordinates and the class score share this tensor. Quantizing it with one
+# scale follows the coordinates and rounds every score to zero.
+DETECTOR_OUTPUT_NODE = "/model.22/Concat_3"
 
 
 class _TensorReader(CalibrationDataReader):
@@ -105,6 +108,7 @@ def _quantize(
     output_path: Path,
     tensors: list[np.ndarray],
     input_name: str,
+    nodes_to_exclude: list[str] | None = None,
 ) -> None:
     fixed = output_path.with_suffix(".fixed.onnx")
     _fix_batch(model_path, fixed)
@@ -115,9 +119,51 @@ def _quantize(
         quant_format=QuantFormat.QDQ,
         activation_type=QuantType.QInt8,
         weight_type=QuantType.QInt8,
+        nodes_to_exclude=nodes_to_exclude,
     )
     fixed.unlink(missing_ok=True)
     logger.info("wrote %s", output_path)
+
+
+def _confidence_channel(raw: np.ndarray) -> np.ndarray:
+    prediction = raw[0]
+    if prediction.shape[0] < prediction.shape[-1]:
+        return prediction[4]
+    return prediction[:, 4]
+
+
+def _check_detector_confidence(
+    float_model: Path,
+    int8_model: Path,
+    images: list[Path],
+) -> None:
+    """Fail when INT8 drops a real plate score to zero."""
+    float_session = ort.InferenceSession(str(float_model), providers=["CPUExecutionProvider"])
+    int8_session = ort.InferenceSession(str(int8_model), providers=["CPUExecutionProvider"])
+    float_input = float_session.get_inputs()[0].name
+    int8_input = int8_session.get_inputs()[0].name
+    checked = 0
+    for path in images:
+        image = cv2.imread(str(path))
+        if image is None:
+            continue
+        blob, _scale, _left, _top = _letterbox(image, DETECTOR_SIZE)
+        float_raw = float_session.run(None, {float_input: blob})[0]
+        int8_raw = int8_session.run(None, {int8_input: blob})[0]
+        float_max = float(_confidence_channel(float_raw).max())
+        int8_max = float(_confidence_channel(int8_raw).max())
+        if float_max < 0.25:
+            continue
+        checked += 1
+        if int8_max < 0.05:
+            raise CalibrationError(
+                f"{path.name}: float confidence {float_max:.3f} became {int8_max:.3f} after INT8"
+            )
+        if checked >= 3:
+            break
+    if checked == 0:
+        raise CalibrationError("calibration frames have no detector score above 0.25")
+    logger.info("INT8 detector kept the confidence channel on %d frames", checked)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -143,7 +189,13 @@ def main(argv: list[str] | None = None) -> int:
         detector_out,
         _detector_tensors(images, detector_input),
         detector_input,
+        nodes_to_exclude=[DETECTOR_OUTPUT_NODE],
     )
+    try:
+        _check_detector_confidence(args.detector, detector_out, images)
+    except CalibrationError as exc:
+        logger.error("%s", exc)
+        return 1
     ocr_session = ort.InferenceSession(str(args.ocr), providers=["CPUExecutionProvider"])
     ocr_input = ocr_session.get_inputs()[0].name
     _quantize(args.ocr, ocr_out, _ocr_tensors(images, args.detector), ocr_input)

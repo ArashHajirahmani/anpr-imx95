@@ -1,4 +1,17 @@
-from anpr.plates import accept_plate, decode_characters, nms, ocr_floor, yolo_candidates
+import numpy as np
+import pytest
+
+from anpr.plates import (
+    OCR_HEIGHT,
+    OCR_WIDTH,
+    accept_plate,
+    decode_characters,
+    nms,
+    ocr_floor,
+    ocr_resize_method,
+    resize_rgb_for_ocr,
+    yolo_candidates,
+)
 
 
 def test_decode_strips_padding() -> None:
@@ -55,3 +68,20 @@ def test_confidence_floor_matches_accurate_reads() -> None:
     assert ocr_floor(0.07, "cpu") == 0.07
     assert ocr_floor(0.07, "npu") == 0.065
     assert accept_plate("192XC", 0.0699, ocr_floor(0.07, "npu"))
+
+
+def test_ocr_resize_method_picks_area_for_downscale() -> None:
+    assert ocr_resize_method(256, 128) == "area"
+    assert ocr_resize_method(40, 20) == "lanczos4"
+    assert ocr_resize_method(OCR_WIDTH, OCR_HEIGHT) == "linear"
+    assert ocr_resize_method(200, 40) == "lanczos4"
+
+
+def test_resize_rgb_for_ocr_shape_and_downscale_kernel() -> None:
+    pytest.importorskip("cv2")
+    large = np.zeros((128, 256, 3), dtype=np.uint8)
+    large[:, :] = (10, 20, 30)
+    out = resize_rgb_for_ocr(large)
+    assert out.shape == (OCR_HEIGHT, OCR_WIDTH, 3)
+    small = np.zeros((32, 64, 3), dtype=np.uint8)
+    assert resize_rgb_for_ocr(small).shape == (OCR_HEIGHT, OCR_WIDTH, 3)

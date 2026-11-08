@@ -7,6 +7,8 @@ tools/host/run-rtsp-server.sh datasets/videos
 tools/host/run-rtsp-server.sh datasets/videos/IMG_9475.mp4
 ```
 
+In a foreground terminal: Space pauses, ← / → seek ±10s, `q` quits. Background/`nohup` runs have no keyboard control. Seek restarts the RTSP publisher; the board capture reconnects after a short gap.
+
 Board URL (example from this PC): `rtsp://10.0.0.117:8554/videoCapture`
 
 `.mp4` files here are gitignored. Keep this README tracked.

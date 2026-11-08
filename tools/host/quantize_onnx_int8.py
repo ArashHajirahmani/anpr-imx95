@@ -97,7 +97,12 @@ def _ocr_tensors(images: list[Path], detector: Path) -> list[np.ndarray]:
         if chosen is None:
             chosen = image
         rgb = cv2.cvtColor(chosen, cv2.COLOR_BGR2RGB)
-        resized = cv2.resize(rgb, (OCR_WIDTH, OCR_HEIGHT))
+        try:
+            from anpr.plates import resize_rgb_for_ocr
+
+            resized = resize_rgb_for_ocr(rgb)
+        except ImportError:
+            resized = cv2.resize(rgb, (OCR_WIDTH, OCR_HEIGHT), interpolation=cv2.INTER_AREA)
         crops.append(np.ascontiguousarray(resized[None, ...]))
     logger.info("ocr calibration tensors: %d", len(crops))
     return crops

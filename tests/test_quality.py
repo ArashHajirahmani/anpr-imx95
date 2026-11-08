@@ -48,10 +48,12 @@ def test_enhancer_keeps_bgr_uint8_shape() -> None:
 def test_ocr_preprocess_contract_after_enhance() -> None:
     import cv2
 
+    from anpr.plates import resize_rgb_for_ocr
+
     crop = np.random.default_rng(1).integers(40, 200, size=(48, 160, 3), dtype=np.uint8)
     enhanced = enhance_crop(crop, EnhancerSettings(enabled=True))
     rgb = cv2.cvtColor(enhanced, cv2.COLOR_BGR2RGB)
-    resized = cv2.resize(rgb, (OCR_WIDTH, OCR_HEIGHT), interpolation=cv2.INTER_LINEAR)
+    resized = resize_rgb_for_ocr(rgb)
     batch = np.ascontiguousarray(resized[None, ...])
     assert batch.dtype == np.uint8
     assert batch.shape == (1, OCR_HEIGHT, OCR_WIDTH, 3)

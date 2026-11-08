@@ -7,6 +7,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 STREAM_PATH="videoCapture"
 RTSP_PORT=8554
 PUBLISH_HOST=127.0.0.1
+SEEK_STEP_SEC=10
 
 show_help() {
     echo "============================================================"
@@ -19,6 +20,13 @@ show_help() {
     echo "  Starts MediaMTX on 0.0.0.0:${RTSP_PORT} and publishes H.264"
     echo "  video forever on path ${STREAM_PATH}."
     echo "  The board opens rtsp://<this-pc>:${RTSP_PORT}/${STREAM_PATH}"
+    echo ""
+    echo "Keyboard (foreground terminal only):"
+    echo "  Space     pause / resume (SIGSTOP / SIGCONT on ffmpeg)"
+    echo "  → / ←     seek +${SEEK_STEP_SEC}s / -${SEEK_STEP_SEC}s (restarts ffmpeg at -ss)"
+    echo "  q         quit"
+    echo "  Seeking reconnects the RTSP publisher; the board may drop a frame"
+    echo "  or two, then the capture thread opens the stream again."
     echo ""
     echo "REQUIREMENTS:"
     echo "  - ffmpeg on PATH"
@@ -114,6 +122,11 @@ if [[ -z "$BOARD_HOST" ]]; then
     BOARD_HOST="<this-pc>"
 fi
 
+INTERACTIVE=0
+if [[ -t 0 ]]; then
+    INTERACTIVE=1
+fi
+
 echo "============================================================"
 echo "Found ${#mp4_files[@]} .mp4 file(s)."
 for f in "${mp4_files[@]}"; do
@@ -121,6 +134,11 @@ for f in "${mp4_files[@]}"; do
 done
 echo "Listen: 0.0.0.0:${RTSP_PORT}"
 echo "Board URL: rtsp://${BOARD_HOST}:${RTSP_PORT}/${STREAM_PATH}"
+if [[ "$INTERACTIVE" -eq 1 ]]; then
+    echo "Keys: Space=pause  ←/→=seek ±${SEEK_STEP_SEC}s  q=quit"
+else
+    echo "Keys: disabled (stdin is not a terminal; run in the foreground)"
+fi
 echo "============================================================"
 
 # True when :8554 is open on every interface. A 127.0.0.1 listener is not enough.
@@ -195,7 +213,9 @@ cleanup() {
     echo ""
     echo "Shutting down the ${STREAM_PATH} publisher..."
     if [[ -n "$FFMPEG_PID" ]]; then
+        kill -CONT "$FFMPEG_PID" 2>/dev/null || true
         kill "$FFMPEG_PID" 2>/dev/null || true
+        wait "$FFMPEG_PID" 2>/dev/null || true
     fi
     if [[ -n "$MEDIAMTX_PID" ]]; then
         kill "$MEDIAMTX_PID" 2>/dev/null || true
@@ -204,16 +224,174 @@ cleanup() {
 }
 trap cleanup SIGINT SIGTERM
 
-while true; do
-    for file in "${mp4_files[@]}"; do
-        echo "[STREAMING] $file -> rtsp://${BOARD_HOST}:${RTSP_PORT}/${STREAM_PATH}"
-        # Publish to loopback; the board still reads via the LAN address above.
-        ffmpeg -hide_banner -loglevel warning -re -i "$file" -c:v copy -an \
-            -rtsp_transport tcp -f rtsp \
-            "rtsp://${PUBLISH_HOST}:${RTSP_PORT}/${STREAM_PATH}" &
-        FFMPEG_PID=$!
+file_duration() {
+    local file=$1
+    local seconds
+    seconds=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$file" 2>/dev/null || true)
+    if [[ -z "$seconds" ]]; then
+        echo 0
+        return
+    fi
+    printf '%.0f' "$seconds"
+}
+
+start_ffmpeg() {
+    local file=$1
+    local start_sec=$2
+    local args=(-hide_banner -loglevel warning -re)
+    if [[ "$start_sec" -gt 0 ]]; then
+        args+=(-ss "$start_sec")
+    fi
+    args+=(-i "$file" -c:v copy -an -rtsp_transport tcp -f rtsp
+        "rtsp://${PUBLISH_HOST}:${RTSP_PORT}/${STREAM_PATH}")
+    ffmpeg "${args[@]}" &
+    FFMPEG_PID=$!
+    PLAY_ORIGIN=$start_sec
+    PLAY_STARTED_AT=$(date +%s)
+    PAUSED=0
+}
+
+current_position() {
+    local now elapsed
+    if [[ "$PAUSED" -eq 1 ]]; then
+        echo "$FROZEN_POS"
+        return
+    fi
+    now=$(date +%s)
+    elapsed=$((now - PLAY_STARTED_AT))
+    echo $((PLAY_ORIGIN + elapsed))
+}
+
+toggle_pause() {
+    if [[ -z "$FFMPEG_PID" ]] || ! kill -0 "$FFMPEG_PID" 2>/dev/null; then
+        return
+    fi
+    if [[ "$PAUSED" -eq 0 ]]; then
+        FROZEN_POS=$(current_position)
+        kill -STOP "$FFMPEG_PID" 2>/dev/null || true
+        PAUSED=1
+        echo "[PAUSED] at ${FROZEN_POS}s"
+    else
+        kill -CONT "$FFMPEG_PID" 2>/dev/null || true
+        PLAY_ORIGIN=$FROZEN_POS
+        PLAY_STARTED_AT=$(date +%s)
+        PAUSED=0
+        echo "[RESUME] from ${PLAY_ORIGIN}s"
+    fi
+}
+
+seek_by() {
+    local file=$1
+    local delta=$2
+    local duration=$3
+    local pos new_pos
+    pos=$(current_position)
+    new_pos=$((pos + delta))
+    if [[ "$new_pos" -lt 0 ]]; then
+        new_pos=0
+    fi
+    if [[ "$duration" -gt 0 && "$new_pos" -ge "$duration" ]]; then
+        echo "[SEEK] past end (${duration}s); advancing to next file"
+        if [[ -n "$FFMPEG_PID" ]]; then
+            kill -CONT "$FFMPEG_PID" 2>/dev/null || true
+            kill "$FFMPEG_PID" 2>/dev/null || true
+            wait "$FFMPEG_PID" 2>/dev/null || true
+            FFMPEG_PID=""
+        fi
+        return 1
+    fi
+    echo "[SEEK] ${pos}s -> ${new_pos}s"
+    if [[ -n "$FFMPEG_PID" ]]; then
+        kill -CONT "$FFMPEG_PID" 2>/dev/null || true
+        kill "$FFMPEG_PID" 2>/dev/null || true
+        wait "$FFMPEG_PID" 2>/dev/null || true
+        FFMPEG_PID=""
+    fi
+    # Brief gap so MediaMTX drops the old publisher before the new one.
+    sleep 0.3
+    start_ffmpeg "$file" "$new_pos"
+    return 0
+}
+
+read_key() {
+    # Returns in REPLY: space|left|right|quit|other
+    local key rest
+    if ! read -rsn1 -t 0.2 key; then
+        REPLY=""
+        return 1
+    fi
+    case "$key" in
+        " ")
+            REPLY=space
+            ;;
+        q|Q)
+            REPLY=quit
+            ;;
+        $'\x1b')
+            # Arrow keys: ESC [ A/B/C/D
+            read -rsn1 -t 0.05 rest || true
+            if [[ "$rest" == "[" ]]; then
+                read -rsn1 -t 0.05 rest || true
+                case "$rest" in
+                    C) REPLY=right ;;
+                    D) REPLY=left ;;
+                    *) REPLY=other ;;
+                esac
+            else
+                REPLY=other
+            fi
+            ;;
+        *)
+            REPLY=other
+            ;;
+    esac
+    return 0
+}
+
+publish_file_once() {
+    local file=$1
+    local duration
+    duration=$(file_duration "$file")
+    echo "[STREAMING] $file -> rtsp://${BOARD_HOST}:${RTSP_PORT}/${STREAM_PATH}"
+    if [[ "$duration" -gt 0 ]]; then
+        echo "[INFO] duration ${duration}s"
+    fi
+    start_ffmpeg "$file" 0
+
+    if [[ "$INTERACTIVE" -eq 0 ]]; then
         wait "$FFMPEG_PID" || echo "Publish stopped. Retrying ${STREAM_PATH}."
         FFMPEG_PID=""
+        return 0
+    fi
+
+    while [[ -n "$FFMPEG_PID" ]] && kill -0 "$FFMPEG_PID" 2>/dev/null; do
+        if read_key; then
+            case "$REPLY" in
+                space)
+                    toggle_pause
+                    ;;
+                right)
+                    seek_by "$file" "$SEEK_STEP_SEC" "$duration" || return 0
+                    ;;
+                left)
+                    seek_by "$file" "-${SEEK_STEP_SEC}" "$duration" || true
+                    ;;
+                quit)
+                    cleanup
+                    ;;
+            esac
+        fi
+        if [[ -n "$FFMPEG_PID" ]] && ! kill -0 "$FFMPEG_PID" 2>/dev/null; then
+            wait "$FFMPEG_PID" 2>/dev/null || true
+            FFMPEG_PID=""
+            break
+        fi
+    done
+}
+
+while true; do
+    for file in "${mp4_files[@]}"; do
+        publish_file_once "$file"
         sleep 1
     done
 done

@@ -184,7 +184,9 @@ class ResultStore:
         stamp = datetime.now().astimezone().isoformat(timespec="seconds")
         prepared: list[tuple[PlateRead, bytes, int, int]] = []
         for read in fresh:
-            plate = crop_plate_jpeg(frame, read.box, jpeg_quality)
+            plate = pre_ocr_jpeg(read, jpeg_quality, frame.stream_name)
+            if plate is None:
+                plate = crop_plate_jpeg(frame, read.box, jpeg_quality)
             if plate is None:
                 prepared.append((read, jpeg, frame.width, frame.height))
             else:
@@ -303,6 +305,31 @@ def encode_jpeg(frame: Frame, quality: int) -> bytes | None:
     if image is None:
         return None
     return _jpeg_bytes(image, quality, frame.stream_name)
+
+
+def pre_ocr_jpeg(
+    read: PlateRead,
+    quality: int,
+    stream: str,
+) -> tuple[bytes, int, int] | None:
+    """JPEG of the enhancer output that OCR resized. Falls back when absent."""
+    import numpy as np
+
+    if (
+        not read.pre_ocr_bgr
+        or read.pre_ocr_width < 2
+        or read.pre_ocr_height < 2
+    ):
+        return None
+    expected = read.pre_ocr_width * read.pre_ocr_height * 3
+    if len(read.pre_ocr_bgr) < expected:
+        return None
+    image = np.frombuffer(read.pre_ocr_bgr, dtype=np.uint8, count=expected)
+    image = image.reshape(read.pre_ocr_height, read.pre_ocr_width, 3)
+    payload = _jpeg_bytes(image, quality, stream)
+    if payload is None:
+        return None
+    return payload, read.pre_ocr_width, read.pre_ocr_height
 
 
 def crop_plate_jpeg(

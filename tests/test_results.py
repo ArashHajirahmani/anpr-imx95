@@ -180,6 +180,39 @@ def test_history_image_is_the_plate_crop() -> None:
     assert latest.width == 12
 
 
+def test_history_image_prefers_pre_ocr_enhancer_output() -> None:
+    cv2 = pytest.importorskip("cv2")
+    numpy = pytest.importorskip("numpy")
+    frame_image = numpy.zeros((8, 12, 3), dtype=numpy.uint8)
+    frame_image[2:6, 3:9] = (20, 40, 60)
+    pre_ocr = numpy.full((5, 7, 3), (90, 100, 110), dtype=numpy.uint8)
+    frame = Frame("videoCapture", frame_image.tobytes(), 1, 12, 8)
+    store = ResultStore(4)
+    store.record(
+        frame,
+        [
+            PlateRead(
+                "ABC123",
+                0.9,
+                PlateBox(3, 2, 6, 4, 0.8),
+                pre_ocr_bgr=pre_ocr.tobytes(),
+                pre_ocr_width=7,
+                pre_ocr_height=5,
+            )
+        ],
+        min_confidence=0.07,
+        jpeg=b"full-frame",
+        last_texts={},
+        jpeg_quality=95,
+    )
+    item = store.history()[0]
+    assert item.width == 7
+    assert item.height == 5
+    decoded = cv2.imdecode(numpy.frombuffer(item.jpeg, dtype=numpy.uint8), cv2.IMREAD_COLOR)
+    assert decoded.shape == (5, 7, 3)
+    assert int(decoded.mean()) == pytest.approx(100, abs=5)
+
+
 def test_encode_jpeg_round_trip() -> None:
     cv2 = pytest_cv2()
     numpy = pytest_numpy()

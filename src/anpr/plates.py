@@ -13,6 +13,49 @@ MIN_OCR_CONFIDENCE = 0.07
 INT8_OCR_MARGIN = 0.005
 
 
+def ocr_resize_method(
+    src_width: int,
+    src_height: int,
+    dst_width: int = OCR_WIDTH,
+    dst_height: int = OCR_HEIGHT,
+) -> str:
+    """Pick OpenCV resize mode for mapping a plate crop onto the OCR canvas.
+
+    Downscales with area averaging so thin strokes survive reduction. Upscales
+    (and mixed one-up/one-down cases) with Lanczos instead of bilinear.
+    """
+    if src_width > dst_width and src_height > dst_height:
+        return "area"
+    if src_width < dst_width or src_height < dst_height:
+        return "lanczos4"
+    return "linear"
+
+
+def resize_rgb_for_ocr(
+    rgb: object,
+    width: int = OCR_WIDTH,
+    height: int = OCR_HEIGHT,
+) -> object:
+    """Resize an RGB uint8 crop to the OCR input size with a scale-aware kernel."""
+    import cv2
+    import numpy as np
+
+    image = np.asarray(rgb)
+    if image.size == 0:
+        return image
+    src_height, src_width = image.shape[:2]
+    if src_width == width and src_height == height:
+        return np.ascontiguousarray(image)
+    method = ocr_resize_method(src_width, src_height, width, height)
+    if method == "area":
+        interpolation = cv2.INTER_AREA
+    elif method == "lanczos4":
+        interpolation = cv2.INTER_LANCZOS4
+    else:
+        interpolation = cv2.INTER_LINEAR
+    return cv2.resize(image, (width, height), interpolation=interpolation)
+
+
 def decode_characters(
     steps: list[list[float]],
     alphabet: str = PLATE_ALPHABET,

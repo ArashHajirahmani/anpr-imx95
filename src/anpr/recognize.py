@@ -10,12 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from anpr.plates import (
-    OCR_HEIGHT,
-    OCR_WIDTH,
     PLATE_ALPHABET,
     center_to_corners,
     decode_characters,
     nms,
+    resize_rgb_for_ocr,
 )
 from anpr.quality import (
     EnhancerSettings,
@@ -36,6 +35,11 @@ class PlateRead:
     confidence: float
     box: PlateBox
     char_confidences: tuple[float, ...] = ()
+    # BGR uint8 bytes of the crop after enhance_crop (identity when enhancer is off).
+    # History JPEGs use this so the UI shows the exact image that entered OCR resize.
+    pre_ocr_bgr: bytes | None = None
+    pre_ocr_width: int = 0
+    pre_ocr_height: int = 0
 
 
 @dataclass(frozen=True)
@@ -127,15 +131,20 @@ class PlateReader:
             if not ok:
                 log_quality_reject(frame.stream_name, reason, metrics)
                 continue
-            text, ocr_confidence, char_confidences = self._read_crop(crop)
+            prepared = enhance_crop(crop, self._enhancer)
+            text, ocr_confidence, char_confidences = self._ocr_crop(prepared)
             if not text:
                 continue
+            pre = np.ascontiguousarray(prepared)
             reads.append(
                 PlateRead(
                     text=text,
                     confidence=ocr_confidence,
                     box=PlateBox(x1, y1, x2 - x1, y2 - y1, confidence),
                     char_confidences=tuple(char_confidences),
+                    pre_ocr_bgr=pre.tobytes(),
+                    pre_ocr_width=int(pre.shape[1]),
+                    pre_ocr_height=int(pre.shape[0]),
                 )
             )
         finished = time.perf_counter()
@@ -149,13 +158,12 @@ class PlateReader:
         )
         return reads, stats
 
-    def _read_crop(self, bgr: object) -> tuple[str, float, list[float]]:
+    def _ocr_crop(self, prepared_bgr: object) -> tuple[str, float, list[float]]:
         import cv2
         import numpy as np
 
-        prepared = enhance_crop(bgr, self._enhancer)
-        rgb = cv2.cvtColor(prepared, cv2.COLOR_BGR2RGB)
-        resized = cv2.resize(rgb, (OCR_WIDTH, OCR_HEIGHT), interpolation=cv2.INTER_LINEAR)
+        rgb = cv2.cvtColor(prepared_bgr, cv2.COLOR_BGR2RGB)
+        resized = resize_rgb_for_ocr(rgb)
         batch = np.ascontiguousarray(resized[None, ...])
         logits = self._ocr.run(None, {self._ocr_input: batch})[0][0]
         return decode_characters(logits.tolist(), self._alphabet)

@@ -61,7 +61,7 @@ After YOLO crops a plate, the runtime applies three independent checks. Device t
 | Gate | Config | Default behavior |
 | --- | --- | --- |
 | Image quality | `recognizer.quality` | Reject blurry, dark, bright, or low-contrast crops before OCR |
-| Optional enhancer | `recognizer.enhancer` | Off by default; CLAHE / gamma / mild sharpen; never overrides reject gates |
+| Optional enhancer | `recognizer.enhancer` | On in the sample; CLAHE / gamma / mild sharpen; never overrides reject gates |
 | Per-character confidence | `recognizer.min_char_confidence` | Reject the whole plate if any kept character is below the floor |
 | Mean confidence | `recognizer.min_confidence` | Existing mean softmax floor (NPU subtracts 0.005) |
 

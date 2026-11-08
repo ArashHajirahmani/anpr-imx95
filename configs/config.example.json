@@ -39,7 +39,7 @@
       "min_contrast": 25
     },
     "enhancer": {
-      "enabled": false,
+      "enabled": true,
       "clahe": true,
       "gamma": 1.1,
       "sharpen": true

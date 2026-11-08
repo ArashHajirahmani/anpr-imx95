@@ -13,6 +13,7 @@ src/anpr/                     application package
 configs/config.example.json   board config; videoCapture RTSP source
 deploy/                       systemd units and udev rule
 datasets/calibration/         INT8 calibration frames (images are gitignored)
+datasets/videos/              H.264 bench MP4s for RTSP (files are gitignored)
 tools/host/export_int8.py     host-side INT8 export preflight
 tools/host/run-rtsp-server.sh publish MP4 files for the board
 docs/                         architecture, upstreams, model export
@@ -56,7 +57,8 @@ Set `ANPR_LOG_LEVEL=DEBUG` on either unit for one journal line per request.
 Publish MP4 files from this PC, then install the same JSON on the board as `/etc/anpr/config.json`:
 
 ```bash
-tools/host/run-rtsp-server.sh /path/to/videos
+tools/host/run-rtsp-server.sh datasets/videos
+tools/host/run-rtsp-server.sh datasets/videos/IMG_9475.mp4
 ```
 
-MediaMTX is not in git. Put the executable at `tools/host/mediamtx`, next to `tools/host/run-rtsp-server.sh`. The other release files (`mediamtx.yml`, `LICENSE`, `auto.crt`, `auto.key`) can stay in that directory; they are gitignored. `MEDIAMTX_BIN` or a `mediamtx` binary on `PATH` also works. The script prints the board URL from this PC's current address. Video tracks must be H.264.
+MediaMTX is not in git. Put the executable at `tools/host/mediamtx`, next to `tools/host/run-rtsp-server.sh`. The other release files (`mediamtx.yml`, `LICENSE`, `auto.crt`, `auto.key`) can stay in that directory; they are gitignored. `MEDIAMTX_BIN` or a `mediamtx` binary on `PATH` also works. The script prints the board URL from this PC's current address. Video tracks must be H.264. Phone `.MOV` files are often HEVC; convert before dropping them in `datasets/videos`.

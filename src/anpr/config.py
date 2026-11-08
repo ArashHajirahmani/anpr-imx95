@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from anpr.quality import EnhancerSettings, QualitySettings
+
 STREAM_TYPES = frozenset({"rtsp", "rtp", "v4l2"})
 RUNTIMES = frozenset({"cpu", "npu"})
 
@@ -39,6 +41,9 @@ class RecognizerConfig:
     delegate_path: str
     charset: str
     min_confidence: float
+    min_char_confidence: float
+    quality: QualitySettings
+    enhancer: EnhancerSettings
 
 
 @dataclass(frozen=True)
@@ -131,19 +136,80 @@ def _detector(payload: dict[str, object]) -> DetectorConfig:
 
 def _recognizer(payload: dict[str, object]) -> RecognizerConfig:
     body = _object(payload.get("recognizer"), "recognizer")
-    minimum = body.get("min_confidence", 0.07)
-    if isinstance(minimum, bool) or not isinstance(minimum, int | float):
-        raise ConfigError("recognizer.min_confidence must be a number")
-    if not 0.0 <= float(minimum) <= 1.0:
-        raise ConfigError("recognizer.min_confidence must be between 0 and 1")
+    minimum = _unit_float(body.get("min_confidence", 0.07), "recognizer.min_confidence")
+    min_char = _unit_float(
+        body.get("min_char_confidence", minimum),
+        "recognizer.min_char_confidence",
+    )
     return RecognizerConfig(
         enabled=_bool(body.get("enabled"), "recognizer.enabled"),
         path=_string(body.get("path"), "recognizer.path"),
         npu_path=_string(body.get("npu_path", ""), "recognizer.npu_path"),
         delegate_path=_string(body.get("delegate_path"), "recognizer.delegate_path"),
         charset=_string(body.get("charset"), "recognizer.charset"),
-        min_confidence=float(minimum),
+        min_confidence=minimum,
+        min_char_confidence=min_char,
+        quality=_quality(body.get("quality")),
+        enhancer=_enhancer(body.get("enhancer")),
     )
+
+
+def _quality(raw: object) -> QualitySettings:
+    if raw is None:
+        return QualitySettings()
+    body = _object(raw, "recognizer.quality")
+    min_brightness = _non_negative(
+        body.get("min_brightness", 40.0),
+        "recognizer.quality.min_brightness",
+    )
+    max_brightness = _non_negative(
+        body.get("max_brightness", 220.0),
+        "recognizer.quality.max_brightness",
+    )
+    if max_brightness < min_brightness:
+        raise ConfigError("recognizer.quality.max_brightness must be >= min_brightness")
+    return QualitySettings(
+        enabled=_bool(body.get("enabled", True), "recognizer.quality.enabled"),
+        min_laplacian_var=_non_negative(
+            body.get("min_laplacian_var", 40.0),
+            "recognizer.quality.min_laplacian_var",
+        ),
+        min_brightness=min_brightness,
+        max_brightness=max_brightness,
+        min_contrast=_non_negative(
+            body.get("min_contrast", 25.0),
+            "recognizer.quality.min_contrast",
+        ),
+    )
+
+
+def _enhancer(raw: object) -> EnhancerSettings:
+    if raw is None:
+        return EnhancerSettings()
+    body = _object(raw, "recognizer.enhancer")
+    gamma = body.get("gamma", 1.1)
+    if isinstance(gamma, bool) or not isinstance(gamma, int | float) or float(gamma) <= 0:
+        raise ConfigError("recognizer.enhancer.gamma must be a positive number")
+    return EnhancerSettings(
+        enabled=_bool(body.get("enabled", False), "recognizer.enhancer.enabled"),
+        clahe=_bool(body.get("clahe", True), "recognizer.enhancer.clahe"),
+        gamma=float(gamma),
+        sharpen=_bool(body.get("sharpen", True), "recognizer.enhancer.sharpen"),
+    )
+
+
+def _unit_float(value: object, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ConfigError(f"{label} must be a number")
+    if not 0.0 <= float(value) <= 1.0:
+        raise ConfigError(f"{label} must be between 0 and 1")
+    return float(value)
+
+
+def _non_negative(value: object, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float) or float(value) < 0:
+        raise ConfigError(f"{label} must be a non-negative number")
+    return float(value)
 
 
 def _service(payload: dict[str, object]) -> ServiceConfig:

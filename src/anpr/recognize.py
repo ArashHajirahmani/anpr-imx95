@@ -17,6 +17,13 @@ from anpr.plates import (
     decode_characters,
     nms,
 )
+from anpr.quality import (
+    EnhancerSettings,
+    QualitySettings,
+    crop_quality,
+    enhance_crop,
+    log_quality_reject,
+)
 from anpr.types import Frame, PlateBox
 
 logger = logging.getLogger("anpr.recognize")
@@ -28,6 +35,7 @@ class PlateRead:
     text: str
     confidence: float
     box: PlateBox
+    char_confidences: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -47,6 +55,8 @@ class PlateReader:
         alphabet: str = PLATE_ALPHABET,
         threshold: float = 0.25,
         runtime: str = "cpu",
+        quality: QualitySettings | None = None,
+        enhancer: EnhancerSettings | None = None,
     ) -> None:
         import onnxruntime as ort
 
@@ -59,6 +69,8 @@ class PlateReader:
         self._alphabet = alphabet or PLATE_ALPHABET
         self._threshold = threshold
         self._runtime = runtime
+        self._quality = quality or QualitySettings()
+        self._enhancer = enhancer or EnhancerSettings()
         options = ort.SessionOptions()
         options.intra_op_num_threads = 2
         providers: list[str | tuple[str, dict[str, bool]]]
@@ -111,12 +123,19 @@ class PlateReader:
             crop = image[y1:y2, x1:x2]
             if crop.size == 0:
                 continue
-            text, ocr_confidence = self._read_crop(crop)
+            ok, metrics, reason = crop_quality(crop, self._quality)
+            if not ok:
+                log_quality_reject(frame.stream_name, reason, metrics)
+                continue
+            text, ocr_confidence, char_confidences = self._read_crop(crop)
+            if not text:
+                continue
             reads.append(
                 PlateRead(
                     text=text,
-                    confidence=ocr_confidence if text else confidence,
+                    confidence=ocr_confidence,
                     box=PlateBox(x1, y1, x2 - x1, y2 - y1, confidence),
+                    char_confidences=tuple(char_confidences),
                 )
             )
         finished = time.perf_counter()
@@ -130,11 +149,12 @@ class PlateReader:
         )
         return reads, stats
 
-    def _read_crop(self, bgr: object) -> tuple[str, float]:
+    def _read_crop(self, bgr: object) -> tuple[str, float, list[float]]:
         import cv2
         import numpy as np
 
-        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        prepared = enhance_crop(bgr, self._enhancer)
+        rgb = cv2.cvtColor(prepared, cv2.COLOR_BGR2RGB)
         resized = cv2.resize(rgb, (OCR_WIDTH, OCR_HEIGHT), interpolation=cv2.INTER_LINEAR)
         batch = np.ascontiguousarray(resized[None, ...])
         logits = self._ocr.run(None, {self._ocr_input: batch})[0][0]

@@ -89,6 +89,7 @@ def run_streams(
                     plate_reader,
                     config.service.inference_fps_limit,
                     ocr_floor(config.recognizer.min_confidence, config.service.runtime),
+                    ocr_floor(config.recognizer.min_char_confidence, config.service.runtime),
                     results,
                     config.service.jpeg_quality,
                 ),
@@ -186,6 +187,8 @@ def _load_reader(config: AppConfig) -> object | None:
             alphabet=config.recognizer.charset,
             threshold=config.detector.conf_threshold,
             runtime=config.service.runtime,
+            quality=config.recognizer.quality,
+            enhancer=config.recognizer.enhancer,
         )
     except Exception:
         logger.exception("plate reader failed to load")
@@ -215,6 +218,7 @@ def _infer_loop(
     reader: object,
     fps_limit: int,
     min_confidence: float,
+    min_char_confidence: float,
     results: ResultStore | None,
     jpeg_quality: int,
 ) -> None:
@@ -246,6 +250,7 @@ def _infer_loop(
                     frame,
                     reads,
                     min_confidence=min_confidence,
+                    min_char_confidence=min_char_confidence,
                     jpeg_quality=jpeg_quality,
                     last_texts=last_texts,
                     timing=_frame_timing(stats),

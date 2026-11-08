@@ -9,9 +9,31 @@ def test_decode_strips_padding() -> None:
     steps[0][digit] = 5
     steps[1][pad] = 5
     steps[2][pad] = 4
-    text, confidence = decode_characters(steps)
+    text, confidence, char_confidences = decode_characters(steps)
     assert text == "A"
     assert confidence > 0.5
+    assert len(char_confidences) == 1
+    assert char_confidences[0] > 0.5
+
+
+def test_accept_plate_rejects_weak_character() -> None:
+    assert (
+        accept_plate(
+            "AB",
+            0.5,
+            0.07,
+            min_char_confidence=0.07,
+            char_confidences=(0.9, 0.02),
+        )
+        is False
+    )
+    assert accept_plate(
+        "AB",
+        0.5,
+        0.07,
+        min_char_confidence=0.07,
+        char_confidences=(0.9, 0.2),
+    )
 
 
 def test_nms_keeps_the_higher_confidence_box() -> None:

@@ -73,6 +73,29 @@ def test_repeat_and_miss_do_not_grow_history() -> None:
     assert restored.plates[0].box.x == 4
 
 
+def test_weak_character_is_not_published() -> None:
+    store = ResultStore(4)
+    seen: dict[str, set[str]] = {}
+    fresh = store.record(
+        _frame(),
+        [
+            PlateRead(
+                "AB",
+                0.5,
+                PlateBox(4, 6, 30, 12, 0.8),
+                (0.9, 0.02),
+            )
+        ],
+        min_confidence=0.07,
+        min_char_confidence=0.07,
+        jpeg=JPEG,
+        last_texts=seen,
+    )
+    assert fresh == []
+    assert store.latest() is not None
+    assert store.latest().plates == ()
+
+
 def test_confidence_floor_is_inclusive() -> None:
     store = ResultStore(4)
     seen: dict[str, set[str]] = {}
@@ -101,6 +124,11 @@ def test_two_plates_keep_both_boxes() -> None:
     assert latest is not None
     plates = latest.json()["plates"]
     assert [plate["text"] for plate in plates] == ["BBB", "AAA"]
+    assert plates[0]["characters"] == [
+        {"char": "B", "confidence": 0.9},
+        {"char": "B", "confidence": 0.9},
+        {"char": "B", "confidence": 0.9},
+    ]
     assert [item.text for item in store.history()] == ["AAA", "BBB"]
     assert latest.plates[0].box.width == 30
 
@@ -170,7 +198,12 @@ def _frame(stamp: int = 1) -> Frame:
 
 
 def _plate(text: str, confidence: float = 0.9, x: int = 4) -> PlateRead:
-    return PlateRead(text, confidence, PlateBox(x, 6, 30, 12, 0.8))
+    return PlateRead(
+        text,
+        confidence,
+        PlateBox(x, 6, 30, 12, 0.8),
+        tuple(confidence for _ in text),
+    )
 
 
 def pytest_cv2() -> object:

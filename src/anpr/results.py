@@ -117,9 +117,16 @@ class ResultStore:
         last_texts: dict[str, set[str]],
         timing: FrameTiming | None = None,
         jpeg_quality: int = 80,
+        min_char_confidence: float | None = None,
     ) -> list[PlateRead]:
         """Store a frame. Return plate reads whose text was not in the previous set."""
-        accepted, fresh = classify_reads(frame.stream_name, reads, min_confidence, last_texts)
+        accepted, fresh = classify_reads(
+            frame.stream_name,
+            reads,
+            min_confidence,
+            last_texts,
+            min_char_confidence=min_char_confidence,
+        )
         if not jpeg:
             logger.warning("empty jpeg for %s", frame.stream_name)
             return fresh
@@ -138,6 +145,7 @@ class ResultStore:
         jpeg_quality: int,
         last_texts: dict[str, set[str]],
         timing: FrameTiming | None = None,
+        min_char_confidence: float | None = None,
     ) -> list[PlateRead]:
         """Encode the frame, store it, and return newly accepted plates."""
         try:
@@ -146,11 +154,18 @@ class ResultStore:
             logger.exception("jpeg encode failed for %s", frame.stream_name)
             jpeg = None
         if not jpeg:
-            return classify_reads(frame.stream_name, reads, min_confidence, last_texts)[1]
+            return classify_reads(
+                frame.stream_name,
+                reads,
+                min_confidence,
+                last_texts,
+                min_char_confidence=min_char_confidence,
+            )[1]
         return self.record(
             frame,
             reads,
             min_confidence=min_confidence,
+            min_char_confidence=min_char_confidence,
             jpeg=jpeg,
             last_texts=last_texts,
             timing=timing,
@@ -223,14 +238,22 @@ def publish_reads(
     jpeg_quality: int,
     last_texts: dict[str, set[str]],
     timing: FrameTiming | None = None,
+    min_char_confidence: float | None = None,
 ) -> list[PlateRead]:
     """Store the frame when a result store is attached, and return new plates."""
     if store is None:
-        return classify_reads(frame.stream_name, reads, min_confidence, last_texts)[1]
+        return classify_reads(
+            frame.stream_name,
+            reads,
+            min_confidence,
+            last_texts,
+            min_char_confidence=min_char_confidence,
+        )[1]
     return store.observe(
         frame,
         reads,
         min_confidence=min_confidence,
+        min_char_confidence=min_char_confidence,
         jpeg_quality=jpeg_quality,
         last_texts=last_texts,
         timing=timing,
@@ -242,13 +265,25 @@ def classify_reads(
     reads: list[PlateRead],
     min_confidence: float,
     last_texts: dict[str, set[str]],
+    *,
+    min_char_confidence: float | None = None,
 ) -> tuple[list[PlateRead], list[PlateRead]]:
     """Accepted plates, and the subset whose text was not already showing.
 
     A frame with no accepted plate leaves the previous texts in place, so a
     missed frame does not log the same plate again on the next hit.
     """
-    accepted = [read for read in reads if accept_plate(read.text, read.confidence, min_confidence)]
+    accepted = [
+        read
+        for read in reads
+        if accept_plate(
+            read.text,
+            read.confidence,
+            min_confidence,
+            min_char_confidence=min_char_confidence,
+            char_confidences=read.char_confidences,
+        )
+    ]
     if not accepted:
         return [], []
     seen = set(last_texts.get(stream, set()))
@@ -350,6 +385,10 @@ def _plate_json(read: PlateRead) -> dict[str, object]:
     return {
         "text": read.text,
         "confidence": round(read.confidence, 4),
+        "characters": [
+            {"char": character, "confidence": round(score, 4)}
+            for character, score in zip(read.text, read.char_confidences, strict=False)
+        ],
         "box": _box_json(read.box),
     }
 

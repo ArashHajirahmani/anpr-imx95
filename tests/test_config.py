@@ -19,6 +19,11 @@ def test_example_config_loads() -> None:
     assert config.recognizer.enabled is True
     assert config.recognizer.path.endswith("cct_xs_v2_global.onnx")
     assert config.recognizer.min_confidence == 0.07
+    assert config.recognizer.min_char_confidence == 0.07
+    assert config.recognizer.quality.enabled is True
+    assert config.recognizer.quality.min_laplacian_var == 40
+    assert config.recognizer.enhancer.enabled is False
+    assert config.recognizer.enhancer.gamma == 1.1
     assert config.service.runtime == "cpu"
     assert config.service.inference_fps_limit == 2
     assert config.service.api_socket == "/run/anpr/api.sock"

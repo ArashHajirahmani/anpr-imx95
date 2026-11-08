@@ -29,7 +29,21 @@
     "npu_path": "/opt/anpr/models/cct_xs_v2_global.int8.onnx",
     "delegate_path": "",
     "charset": "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_",
-    "min_confidence": 0.07
+    "min_confidence": 0.07,
+    "min_char_confidence": 0.07,
+    "quality": {
+      "enabled": true,
+      "min_laplacian_var": 40,
+      "min_brightness": 40,
+      "max_brightness": 220,
+      "min_contrast": 25
+    },
+    "enhancer": {
+      "enabled": false,
+      "clahe": true,
+      "gamma": 1.1,
+      "sharpen": true
+    }
   },
   "service": {
     "runtime": "cpu",

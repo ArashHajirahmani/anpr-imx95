@@ -17,10 +17,10 @@ def decode_characters(
     steps: list[list[float]],
     alphabet: str = PLATE_ALPHABET,
     pad: str = PLATE_PAD,
-) -> tuple[str, float]:
-    """Turn per-character logits into text and a mean confidence."""
+) -> tuple[str, float, list[float]]:
+    """Turn per-character logits into text, mean confidence, and per-char probs."""
     if not steps:
-        return "", 0.0
+        return "", 0.0, []
     chars: list[str] = []
     confidences: list[float] = []
     for step in steps:
@@ -31,8 +31,8 @@ def decode_characters(
         chars.append(character)
         confidences.append(confidence)
     if not chars:
-        return "", 0.0
-    return "".join(chars), sum(confidences) / len(confidences)
+        return "", 0.0, []
+    return "".join(chars), sum(confidences) / len(confidences), confidences
 
 
 def ocr_floor(minimum: float, runtime: str) -> float:
@@ -42,9 +42,21 @@ def ocr_floor(minimum: float, runtime: str) -> float:
     return minimum
 
 
-def accept_plate(text: str, confidence: float, minimum: float = MIN_OCR_CONFIDENCE) -> bool:
-    """Keep a read only when it has text at or above the accurate confidence floor."""
-    return bool(text) and confidence >= minimum
+def accept_plate(
+    text: str,
+    confidence: float,
+    minimum: float = MIN_OCR_CONFIDENCE,
+    *,
+    min_char_confidence: float | None = None,
+    char_confidences: list[float] | tuple[float, ...] | None = None,
+) -> bool:
+    """Keep a read only when every character and the mean clear their floors."""
+    if not text:
+        return False
+    if min_char_confidence is not None and char_confidences is not None:
+        if any(score < min_char_confidence for score in char_confidences):
+            return False
+    return confidence >= minimum
 
 
 def yolo_candidates(

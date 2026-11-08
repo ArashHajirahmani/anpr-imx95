@@ -189,6 +189,7 @@ def _load_reader(config: AppConfig) -> object | None:
             runtime=config.service.runtime,
             quality=config.recognizer.quality,
             enhancer=config.recognizer.enhancer,
+            roi_refine=config.recognizer.roi_refine,
         )
     except Exception:
         logger.exception("plate reader failed to load")

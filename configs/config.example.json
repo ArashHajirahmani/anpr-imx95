@@ -19,14 +19,14 @@
     "path": "/opt/anpr/models/plate_detector.onnx",
     "npu_path": "/opt/anpr/models/plate_detector.int8.onnx",
     "delegate_path": "",
-    "conf_threshold": 0.7,
+    "conf_threshold": 0.72,
     "input_width": 640,
     "input_height": 640
   },
   "recognizer": {
     "enabled": true,
-    "path": "/opt/anpr/models/cct_xs_v2_global.onnx",
-    "npu_path": "/opt/anpr/models/cct_xs_v2_global.int8.onnx",
+    "path": "/opt/anpr/models/cct_s_v2_global.onnx",
+    "npu_path": "/opt/anpr/models/cct_s_v2_global.int8.onnx",
     "delegate_path": "",
     "charset": "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_",
     "min_confidence": 0.07,
@@ -43,6 +43,24 @@
       "clahe": true,
       "gamma": 1.1,
       "sharpen": true
+    },
+    "roi_refine": {
+      "expand": {
+        "enabled": true,
+        "max_ratio": 0.25,
+        "edge_fraction": 0.08,
+        "ink_threshold": 0.12,
+        "pad_fraction": 0.12
+      },
+      "perspective": {
+        "enabled": true,
+        "max_ratio": 0.35,
+        "min_score": 0.45,
+        "min_aspect": 1.8,
+        "max_aspect": 6.0,
+        "canny_low": 40,
+        "canny_high": 120
+      }
     }
   },
   "service": {

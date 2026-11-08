@@ -15,15 +15,19 @@ def test_example_config_loads() -> None:
     assert config.enabled_streams()[0].name == "videoCapture"
     assert config.enabled_streams()[0].uri == "rtsp://10.0.0.117:8554/videoCapture"
     assert config.detector.path.endswith("plate_detector.onnx")
-    assert config.detector.conf_threshold == 0.7
+    assert config.detector.conf_threshold == 0.72
     assert config.recognizer.enabled is True
-    assert config.recognizer.path.endswith("cct_xs_v2_global.onnx")
+    assert config.recognizer.path.endswith("cct_s_v2_global.onnx")
     assert config.recognizer.min_confidence == 0.07
     assert config.recognizer.min_char_confidence == 0.07
     assert config.recognizer.quality.enabled is True
     assert config.recognizer.quality.min_laplacian_var == 40
     assert config.recognizer.enhancer.enabled is True
     assert config.recognizer.enhancer.gamma == 1.1
+    assert config.recognizer.roi_refine.expand.enabled is True
+    assert config.recognizer.roi_refine.expand.max_ratio == 0.25
+    assert config.recognizer.roi_refine.perspective.enabled is True
+    assert config.recognizer.roi_refine.perspective.max_ratio == 0.35
     assert config.service.runtime == "cpu"
     assert config.service.inference_fps_limit == 2
     assert config.service.api_socket == "/run/anpr/api.sock"
@@ -33,7 +37,7 @@ def test_example_config_loads() -> None:
     assert config.web.listen_port == 8080
     assert config.web.poll_seconds == 0.5
     assert config.detector.npu_path.endswith("plate_detector.int8.onnx")
-    assert config.recognizer.npu_path.endswith("cct_xs_v2_global.int8.onnx")
+    assert config.recognizer.npu_path.endswith("cct_s_v2_global.int8.onnx")
 
 
 def test_check_config_command() -> None:
@@ -83,7 +87,7 @@ def test_rejects_duplicate_stream_names(tmp_path: Path) -> None:
 
 def _write(tmp_path: Path, *, conf_threshold: float = 0.5, stream_type: str = "rtsp") -> Path:
     text = EXAMPLE.read_text(encoding="utf-8")
-    text = text.replace('"conf_threshold": 0.7', f'"conf_threshold": {conf_threshold}')
+    text = text.replace('"conf_threshold": 0.72', f'"conf_threshold": {conf_threshold}')
     text = text.replace('"type": "rtsp"', f'"type": "{stream_type}"', 1)
     path = tmp_path / "config.json"
     path.write_text(text, encoding="utf-8")

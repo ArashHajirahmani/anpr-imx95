@@ -23,6 +23,7 @@ from anpr.quality import (
     enhance_crop,
     log_quality_reject,
 )
+from anpr.roi_refine import RoiRefineSettings, refine_plate_roi
 from anpr.types import Frame, PlateBox
 
 logger = logging.getLogger("anpr.recognize")
@@ -61,6 +62,7 @@ class PlateReader:
         runtime: str = "cpu",
         quality: QualitySettings | None = None,
         enhancer: EnhancerSettings | None = None,
+        roi_refine: RoiRefineSettings | None = None,
     ) -> None:
         import onnxruntime as ort
 
@@ -75,6 +77,7 @@ class PlateReader:
         self._runtime = runtime
         self._quality = quality or QualitySettings()
         self._enhancer = enhancer or EnhancerSettings()
+        self._roi_refine = roi_refine or RoiRefineSettings.disabled()
         options = ort.SessionOptions()
         options.intra_op_num_threads = 2
         providers: list[str | tuple[str, dict[str, bool]]]
@@ -124,7 +127,8 @@ class PlateReader:
         boxes = _boxes_from_yolo(raw, self._threshold, scale, left, top, frame.width, frame.height)
         reads: list[PlateRead] = []
         for x1, y1, x2, y2, confidence in boxes:
-            crop = image[y1:y2, x1:x2]
+            refined = refine_plate_roi(image, x1, y1, x2, y2, self._roi_refine)
+            crop = np.asarray(refined.crop_bgr)
             if crop.size == 0:
                 continue
             ok, metrics, reason = crop_quality(crop, self._quality)
@@ -136,11 +140,27 @@ class PlateReader:
             if not text:
                 continue
             pre = np.ascontiguousarray(prepared)
+            if refined.method != "yolo":
+                logger.debug(
+                    "roi refine %s method=%s box=%d,%d %dx%d",
+                    frame.stream_name,
+                    refined.method,
+                    refined.x1,
+                    refined.y1,
+                    refined.x2 - refined.x1,
+                    refined.y2 - refined.y1,
+                )
             reads.append(
                 PlateRead(
                     text=text,
                     confidence=ocr_confidence,
-                    box=PlateBox(x1, y1, x2 - x1, y2 - y1, confidence),
+                    box=PlateBox(
+                        refined.x1,
+                        refined.y1,
+                        refined.x2 - refined.x1,
+                        refined.y2 - refined.y1,
+                        confidence,
+                    ),
                     char_confidences=tuple(char_confidences),
                     pre_ocr_bgr=pre.tobytes(),
                     pre_ocr_width=int(pre.shape[1]),
@@ -202,7 +222,7 @@ def _boxes_from_yolo(
         prediction = prediction.T
     selected: list[tuple[float, float, float, float, float]] = []
     for cx, cy, width, height, confidence in prediction:
-        if float(confidence) < threshold:
+        if float(confidence) <= threshold:
             continue
         x1, y1, x2, y2 = center_to_corners(float(cx), float(cy), float(width), float(height))
         x1 = (x1 - left) / scale

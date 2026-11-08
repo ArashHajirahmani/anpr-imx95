@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from anpr.quality import EnhancerSettings, QualitySettings
+from anpr.roi_refine import ExpandSettings, PerspectiveSettings, RoiRefineSettings
 
 STREAM_TYPES = frozenset({"rtsp", "rtp", "v4l2"})
 RUNTIMES = frozenset({"cpu", "npu"})
@@ -44,6 +45,7 @@ class RecognizerConfig:
     min_char_confidence: float
     quality: QualitySettings
     enhancer: EnhancerSettings
+    roi_refine: RoiRefineSettings
 
 
 @dataclass(frozen=True)
@@ -151,6 +153,7 @@ def _recognizer(payload: dict[str, object]) -> RecognizerConfig:
         min_char_confidence=min_char,
         quality=_quality(body.get("quality")),
         enhancer=_enhancer(body.get("enhancer")),
+        roi_refine=_roi_refine(body.get("roi_refine")),
     )
 
 
@@ -195,6 +198,88 @@ def _enhancer(raw: object) -> EnhancerSettings:
         clahe=_bool(body.get("clahe", True), "recognizer.enhancer.clahe"),
         gamma=float(gamma),
         sharpen=_bool(body.get("sharpen", True), "recognizer.enhancer.sharpen"),
+    )
+
+
+def _roi_refine(raw: object) -> RoiRefineSettings:
+    if raw is None:
+        return RoiRefineSettings(
+            expand=ExpandSettings(),
+            perspective=PerspectiveSettings(),
+        )
+    body = _object(raw, "recognizer.roi_refine")
+    return RoiRefineSettings(
+        expand=_expand(body.get("expand")),
+        perspective=_perspective(body.get("perspective")),
+    )
+
+
+def _expand(raw: object) -> ExpandSettings:
+    if raw is None:
+        return ExpandSettings()
+    body = _object(raw, "recognizer.roi_refine.expand")
+    return ExpandSettings(
+        enabled=_bool(body.get("enabled", True), "recognizer.roi_refine.expand.enabled"),
+        max_ratio=_unit_float(
+            body.get("max_ratio", 0.25),
+            "recognizer.roi_refine.expand.max_ratio",
+        ),
+        edge_fraction=_unit_float(
+            body.get("edge_fraction", 0.08),
+            "recognizer.roi_refine.expand.edge_fraction",
+        ),
+        ink_threshold=_unit_float(
+            body.get("ink_threshold", 0.12),
+            "recognizer.roi_refine.expand.ink_threshold",
+        ),
+        pad_fraction=_unit_float(
+            body.get("pad_fraction", 0.12),
+            "recognizer.roi_refine.expand.pad_fraction",
+        ),
+    )
+
+
+def _perspective(raw: object) -> PerspectiveSettings:
+    if raw is None:
+        return PerspectiveSettings()
+    body = _object(raw, "recognizer.roi_refine.perspective")
+    min_aspect = _positive_number(
+        body.get("min_aspect", 1.8),
+        "recognizer.roi_refine.perspective.min_aspect",
+    )
+    max_aspect = _positive_number(
+        body.get("max_aspect", 6.0),
+        "recognizer.roi_refine.perspective.max_aspect",
+    )
+    if max_aspect < min_aspect:
+        raise ConfigError("recognizer.roi_refine.perspective.max_aspect must be >= min_aspect")
+    return PerspectiveSettings(
+        enabled=_bool(
+            body.get("enabled", True),
+            "recognizer.roi_refine.perspective.enabled",
+        ),
+        max_ratio=_unit_float(
+            body.get("max_ratio", 0.35),
+            "recognizer.roi_refine.perspective.max_ratio",
+        ),
+        min_score=_unit_float(
+            body.get("min_score", 0.45),
+            "recognizer.roi_refine.perspective.min_score",
+        ),
+        min_aspect=min_aspect,
+        max_aspect=max_aspect,
+        canny_low=_bounded_int(
+            body.get("canny_low", 40),
+            "recognizer.roi_refine.perspective.canny_low",
+            0,
+            255,
+        ),
+        canny_high=_bounded_int(
+            body.get("canny_high", 120),
+            "recognizer.roi_refine.perspective.canny_high",
+            0,
+            255,
+        ),
     )
 
 

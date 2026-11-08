@@ -8,7 +8,9 @@ recognizer -> journal
 recognizer -> result store -> HTTP on a Unix socket -> anpr web -> browser
 ```
 
-When `recognizer.enabled` is true, one thread runs the plate detector and OCR on the latest frame. `service.runtime` is `cpu` for the float ONNX models or `npu` for the INT8 models on ONNX Runtime's Neutron provider. The journal line includes `runtime`, `det_ms`, `ocr_ms`, `cpu`, and `rss_mb`. A plate is logged only when the mean character probability is at least `recognizer.min_confidence` (0.07). The npu path subtracts 0.005, because the INT8 OCR score for the same crop sits just under the float score. Repeated copies of the same text are not logged again. A frame with no accepted plate does not clear that memory, so the same text is not logged again after a miss.
+When `recognizer.enabled` is true, one thread runs the plate detector and OCR on the latest frame. `service.runtime` is `cpu` for the float ONNX models or `npu` for the INT8 models on ONNX Runtime's Neutron provider. The journal line includes `runtime`, `det_ms`, `ocr_ms`, `cpu`, and `rss_mb`.
+
+After each plate crop, an image-quality gate can reject blurry, dark, bright, or low-contrast boxes before OCR (`recognizer.quality`). An optional experimental enhancer (`recognizer.enhancer`, off by default) may CLAHE / gamma / sharpen the crop, but it still must feed CCT as 128×64 RGB NHWC uint8 with no Python normalization, and it does not override confidence rejection. A plate is logged only when every kept character clears `recognizer.min_char_confidence` (0.07) and the mean character probability clears `recognizer.min_confidence` (0.07). Those two checks are independent of the quality gate. The npu path subtracts 0.005 from both floors, because the INT8 OCR score for the same crop sits just under the float score. Repeated copies of the same text are not logged again. A frame with no accepted plate does not clear that memory, so the same text is not logged again after a miss.
 
 ## Result API and web client
 
@@ -22,7 +24,7 @@ GET /v1/history
 GET /v1/history/<id>.jpg
 ```
 
-A plate object has `text`, `confidence`, and `box` (`x`, `y`, `width`, `height`, `confidence`). The box is in pixels of that JPEG. Before the first frame, `/v1/latest` returns 503.
+A plate object has `text`, `confidence`, `characters` (each `{ "char", "confidence" }`), and `box` (`x`, `y`, `width`, `height`, `confidence`). The box is in pixels of that JPEG. Before the first frame, `/v1/latest` returns 503.
 
 ```bash
 curl --unix-socket /run/anpr/api.sock http://localhost/v1/latest
@@ -63,6 +65,6 @@ cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
 
 ## Config and install
 
-Sample config: `configs/config.example.json`. On the board the service reads `/etc/anpr/config.json`. Device paths and thresholds live only in that file.
+Sample config: `configs/config.example.json`. On the board the service reads `/etc/anpr/config.json`. Device paths and thresholds live only in that file, including `recognizer.min_char_confidence`, `recognizer.quality`, and `recognizer.enhancer`.
 
 `deploy/systemd/anpr.service` and `deploy/systemd/anpr-web.service` run as user `anpr` in group `video`. `deploy/udev/99-anpr-neutron.rules` keeps `/dev/neutron0` on group `video`. The web unit does not stop when recognition is down.

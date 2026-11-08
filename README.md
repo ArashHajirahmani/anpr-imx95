@@ -52,7 +52,20 @@ journalctl -u anpr -u anpr-web -f
 curl --unix-socket /run/anpr/api.sock http://localhost/v1/latest
 ```
 
-Set `ANPR_LOG_LEVEL=DEBUG` on either unit for one journal line per request.
+Set `ANPR_LOG_LEVEL=DEBUG` on either unit for one journal line per request (includes crop quality rejects).
+
+## Recognition gates
+
+After YOLO crops a plate, the runtime applies three independent checks. Device thresholds live in `/etc/anpr/config.json` (see `configs/config.example.json`).
+
+| Gate | Config | Default behavior |
+| --- | --- | --- |
+| Image quality | `recognizer.quality` | Reject blurry, dark, bright, or low-contrast crops before OCR |
+| Optional enhancer | `recognizer.enhancer` | Off by default; CLAHE / gamma / mild sharpen; never overrides reject gates |
+| Per-character confidence | `recognizer.min_char_confidence` | Reject the whole plate if any kept character is below the floor |
+| Mean confidence | `recognizer.min_confidence` | Existing mean softmax floor (NPU subtracts 0.005) |
+
+Accepted plate JSON includes `characters: [{ "char", "confidence" }, ...]`. Uncertain plates are not published. Details are in [docs/architecture.md](docs/architecture.md). When to re-quantize after a camera or lighting change is in [docs/model-export.md](docs/model-export.md).
 
 Publish MP4 files from this PC, then install the same JSON on the board as `/etc/anpr/config.json`:
 

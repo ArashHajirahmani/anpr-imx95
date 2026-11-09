@@ -138,7 +138,7 @@ def _detector(payload: dict[str, object]) -> DetectorConfig:
 
 def _recognizer(payload: dict[str, object]) -> RecognizerConfig:
     body = _object(payload.get("recognizer"), "recognizer")
-    minimum = _unit_float(body.get("min_confidence", 0.07), "recognizer.min_confidence")
+    minimum = _unit_float(body.get("min_confidence", 0.70), "recognizer.min_confidence")
     min_char = _unit_float(
         body.get("min_char_confidence", minimum),
         "recognizer.min_char_confidence",
@@ -218,24 +218,23 @@ def _expand(raw: object) -> ExpandSettings:
     if raw is None:
         return ExpandSettings()
     body = _object(raw, "recognizer.roi_refine.expand")
+    outer_default = body.get("outer_ratio", body.get("max_ratio", 0.20))
     return ExpandSettings(
         enabled=_bool(body.get("enabled", True), "recognizer.roi_refine.expand.enabled"),
-        max_ratio=_unit_float(
-            body.get("max_ratio", 0.25),
-            "recognizer.roi_refine.expand.max_ratio",
+        inner_ratio=_unit_float(
+            body.get("inner_ratio", 0.20),
+            "recognizer.roi_refine.expand.inner_ratio",
         ),
-        edge_fraction=_unit_float(
-            body.get("edge_fraction", 0.08),
-            "recognizer.roi_refine.expand.edge_fraction",
+        outer_ratio=_unit_float(outer_default, "recognizer.roi_refine.expand.outer_ratio"),
+        edge_threshold=_unit_float(
+            body.get("edge_threshold", body.get("ink_threshold", 0.08)),
+            "recognizer.roi_refine.expand.edge_threshold",
         ),
-        ink_threshold=_unit_float(
-            body.get("ink_threshold", 0.12),
-            "recognizer.roi_refine.expand.ink_threshold",
+        pad_ratio=_unit_float(
+            body.get("pad_ratio", 0.05),
+            "recognizer.roi_refine.expand.pad_ratio",
         ),
-        pad_fraction=_unit_float(
-            body.get("pad_fraction", 0.12),
-            "recognizer.roi_refine.expand.pad_fraction",
-        ),
+        max_ratio=_unit_float(outer_default, "recognizer.roi_refine.expand.max_ratio"),
     )
 
 
@@ -255,7 +254,7 @@ def _perspective(raw: object) -> PerspectiveSettings:
         raise ConfigError("recognizer.roi_refine.perspective.max_aspect must be >= min_aspect")
     return PerspectiveSettings(
         enabled=_bool(
-            body.get("enabled", True),
+            body.get("enabled", False),
             "recognizer.roi_refine.perspective.enabled",
         ),
         max_ratio=_unit_float(

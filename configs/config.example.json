@@ -19,7 +19,7 @@
     "path": "/opt/anpr/models/plate_detector.onnx",
     "npu_path": "/opt/anpr/models/plate_detector.int8.onnx",
     "delegate_path": "",
-    "conf_threshold": 0.72,
+    "conf_threshold": 0.70,
     "input_width": 640,
     "input_height": 640
   },
@@ -29,8 +29,8 @@
     "npu_path": "/opt/anpr/models/cct_s_v2_global.int8.onnx",
     "delegate_path": "",
     "charset": "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_",
-    "min_confidence": 0.07,
-    "min_char_confidence": 0.07,
+    "min_confidence": 0.70,
+    "min_char_confidence": 0.70,
     "quality": {
       "enabled": true,
       "min_laplacian_var": 40,
@@ -47,13 +47,13 @@
     "roi_refine": {
       "expand": {
         "enabled": true,
-        "max_ratio": 0.25,
-        "edge_fraction": 0.08,
-        "ink_threshold": 0.12,
-        "pad_fraction": 0.12
+        "inner_ratio": 0.20,
+        "outer_ratio": 0.20,
+        "edge_threshold": 0.08,
+        "pad_ratio": 0.05
       },
       "perspective": {
-        "enabled": true,
+        "enabled": false,
         "max_ratio": 0.35,
         "min_score": 0.45,
         "min_aspect": 1.8,
@@ -68,7 +68,7 @@
     "inference_fps_limit": 2,
     "api_socket": "/run/anpr/api.sock",
     "jpeg_quality": 80,
-    "history_limit": 4
+    "history_limit": 50
   },
   "web": {
     "listen_host": "0.0.0.0",

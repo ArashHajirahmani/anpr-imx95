@@ -12,6 +12,7 @@ from anpr.config import AppConfig
 from anpr.plates import ocr_floor
 from anpr.results import FrameTiming, ResultStore, publish_reads
 from anpr.types import Frame
+from anpr.vote import PlateVoteTracker
 
 logger = logging.getLogger("anpr.pipeline")
 _OPEN_RETRY_SECONDS = 0.5
@@ -226,6 +227,9 @@ def _infer_loop(
     interval = 1.0 / fps_limit
     next_tick = 0.0
     last_texts: dict[str, set[str]] = {}
+    voter = PlateVoteTracker()
+    # Admit weak OCR into the vote buffer; high-trust / majority decide release.
+    admit_floor = min(0.05, float(min_confidence), float(min_char_confidence))
     while not stop.is_set():
         now = time.monotonic()
         if now < next_tick:
@@ -245,11 +249,53 @@ def _infer_loop(
             reads, stats = _reader_outcome(name, outcome)
             if reads is None or stats is None:
                 continue
+            released: list[object] = []
+            for read in reads:
+                min_char = (
+                    min(read.char_confidences)
+                    if getattr(read, "char_confidences", None)
+                    else read.confidence
+                )
+                if float(min_char) < admit_floor:
+                    logger.info(
+                        "ocr reject %s text=%s min_char=%.2f admit_floor=%.2f",
+                        name,
+                        read.text,
+                        float(min_char),
+                        admit_floor,
+                    )
+                    continue
+                logger.info(
+                    "ocr candidate %s text=%s confidence=%.2f blank=%.2f box=%d,%d %dx%d",
+                    name,
+                    read.text,
+                    float(read.confidence),
+                    float(getattr(read, "blank_uncertainty", 0.0)),
+                    read.box.x,
+                    read.box.y,
+                    read.box.width,
+                    read.box.height,
+                )
+                try:
+                    voted = voter.consider(name, read)
+                except Exception:
+                    logger.exception("plate vote failed for %s", name)
+                    voted = read if float(min_char) >= float(min_char_confidence) else None
+                if voted is None:
+                    continue
+                voted_min = (
+                    min(voted.char_confidences)
+                    if getattr(voted, "char_confidences", None)
+                    else voted.confidence
+                )
+                if float(voted_min) < float(min_char_confidence):
+                    continue
+                released.append(voted)
             try:
                 fresh = publish_reads(
                     results,
                     frame,
-                    reads,
+                    released,
                     min_confidence=min_confidence,
                     min_char_confidence=min_char_confidence,
                     jpeg_quality=jpeg_quality,

@@ -22,11 +22,55 @@ def test_decode_strips_padding() -> None:
     steps[0][digit] = 5
     steps[1][pad] = 5
     steps[2][pad] = 4
-    text, confidence, char_confidences = decode_characters(steps)
+    text, confidence, char_confidences, margins, blank_uncertainty = decode_characters(
+        steps
+    )
     assert text == "A"
     assert confidence > 0.5
     assert len(char_confidences) == 1
     assert char_confidences[0] > 0.5
+    assert len(margins) == 1
+    assert blank_uncertainty >= 0.0
+
+
+def test_decode_collapses_repeated_non_blanks() -> None:
+    alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_"
+    pad = alphabet.index("_")
+    c_idx = alphabet.index("C")
+    a_idx = alphabet.index("A")
+    steps = [[0.0] * len(alphabet) for _ in range(5)]
+    steps[0][c_idx] = 2.0  # weaker C (logits → softmax path)
+    steps[1][c_idx] = 5.0  # stronger C — same run
+    steps[2][pad] = 5.0
+    steps[3][a_idx] = 4.0
+    steps[4][a_idx] = 3.0
+    text, confidence, char_confidences, margins, _blank = decode_characters(steps)
+    assert text == "CA"
+    assert len(char_confidences) == 2
+    assert char_confidences[0] > char_confidences[1] or char_confidences[0] > 0.5
+    assert confidence == min(char_confidences)
+    assert len(margins) == 2
+
+
+def test_decode_uses_probability_steps_without_softmax() -> None:
+    alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_"
+    pad = alphabet.index("_")
+    c_idx = alphabet.index("C")
+    a_idx = alphabet.index("A")
+    steps = [[0.0] * len(alphabet) for _ in range(3)]
+    steps[0][c_idx] = 0.91
+    steps[0][pad] = 0.09
+    steps[1] = [0.0] * len(alphabet)
+    steps[1][c_idx] = 0.55
+    steps[1][a_idx] = 0.45
+    steps[2][a_idx] = 0.88
+    steps[2][pad] = 0.12
+    text, confidence, char_confidences, margins, _blank = decode_characters(steps)
+    assert text == "CA"
+    assert char_confidences[0] == 0.91  # max of the C run
+    assert char_confidences[1] == 0.88
+    assert confidence == 0.88
+    assert len(margins) == 2
 
 
 def test_accept_plate_rejects_weak_character() -> None:
@@ -34,8 +78,8 @@ def test_accept_plate_rejects_weak_character() -> None:
         accept_plate(
             "AB",
             0.5,
-            0.07,
-            min_char_confidence=0.07,
+            0.35,
+            min_char_confidence=0.35,
             char_confidences=(0.9, 0.02),
         )
         is False
@@ -43,9 +87,9 @@ def test_accept_plate_rejects_weak_character() -> None:
     assert accept_plate(
         "AB",
         0.5,
-        0.07,
-        min_char_confidence=0.07,
-        char_confidences=(0.9, 0.2),
+        0.35,
+        min_char_confidence=0.35,
+        char_confidences=(0.9, 0.4),
     )
 
 
@@ -61,13 +105,13 @@ def test_nms_keeps_the_higher_confidence_box() -> None:
     assert yolo_candidates([(1, 1, 2, 2, 0.2), (1, 1, 2, 2, 0.8)], 0.5) == [(1, 1, 2, 2, 0.8)]
 
 
-def test_confidence_floor_matches_accurate_reads() -> None:
-    assert accept_plate("777W455", 0.07)
-    assert accept_plate("777W455", 0.069) is False
+def test_confidence_floor_matches_high_trust() -> None:
+    assert accept_plate("777W455", 0.70)
+    assert accept_plate("777W455", 0.69) is False
     assert accept_plate("", 0.9) is False
-    assert ocr_floor(0.07, "cpu") == 0.07
-    assert ocr_floor(0.07, "npu") == 0.065
-    assert accept_plate("192XC", 0.0699, ocr_floor(0.07, "npu"))
+    assert ocr_floor(0.70, "cpu") == 0.70
+    assert ocr_floor(0.70, "npu") == 0.695
+    assert accept_plate("192XC", 0.695, ocr_floor(0.70, "npu"))
 
 
 def test_ocr_resize_method_picks_area_for_downscale() -> None:

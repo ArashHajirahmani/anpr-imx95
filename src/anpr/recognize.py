@@ -36,6 +36,11 @@ class PlateRead:
     confidence: float
     box: PlateBox
     char_confidences: tuple[float, ...] = ()
+    char_margins: tuple[float, ...] = ()
+    blank_uncertainty: float = 0.0
+    laplacian_var: float = 0.0
+    brightness: float = 0.0
+    contrast: float = 0.0
     # BGR uint8 bytes of the crop after enhance_crop (identity when enhancer is off).
     # History JPEGs use this so the UI shows the exact image that entered OCR resize.
     pre_ocr_bgr: bytes | None = None
@@ -131,12 +136,17 @@ class PlateReader:
             crop = np.asarray(refined.crop_bgr)
             if crop.size == 0:
                 continue
-            ok, metrics, reason = crop_quality(crop, self._quality)
-            if not ok:
+            prepared = enhance_crop(crop, self._enhancer)
+            ok, metrics, reason = crop_quality(prepared, self._quality)
+            if not ok and reason == "empty":
                 log_quality_reject(frame.stream_name, reason, metrics)
                 continue
-            prepared = enhance_crop(crop, self._enhancer)
-            text, ocr_confidence, char_confidences = self._ocr_crop(prepared)
+            if not ok:
+                # Soft gate: keep OCR, attach metrics for vote weighting.
+                log_quality_reject(frame.stream_name, reason, metrics)
+            text, ocr_confidence, char_confidences, char_margins, blank_uncertainty = (
+                self._ocr_crop(prepared)
+            )
             if not text:
                 continue
             pre = np.ascontiguousarray(prepared)
@@ -162,6 +172,11 @@ class PlateReader:
                         confidence,
                     ),
                     char_confidences=tuple(char_confidences),
+                    char_margins=tuple(char_margins),
+                    blank_uncertainty=float(blank_uncertainty),
+                    laplacian_var=metrics.laplacian_var,
+                    brightness=metrics.brightness,
+                    contrast=metrics.contrast,
                     pre_ocr_bgr=pre.tobytes(),
                     pre_ocr_width=int(pre.shape[1]),
                     pre_ocr_height=int(pre.shape[0]),
@@ -178,7 +193,9 @@ class PlateReader:
         )
         return reads, stats
 
-    def _ocr_crop(self, prepared_bgr: object) -> tuple[str, float, list[float]]:
+    def _ocr_crop(
+        self, prepared_bgr: object
+    ) -> tuple[str, float, list[float], list[float], float]:
         import cv2
         import numpy as np
 

@@ -6,9 +6,9 @@ PLATE_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_"
 PLATE_PAD = "_"
 OCR_WIDTH = 128
 OCR_HEIGHT = 64
-# Mean per-character probability. Chance over this 37-symbol alphabet is about 0.027.
-# Reads around 0.07 are the ones that match the plate; lower scores are noise.
-MIN_OCR_CONFIDENCE = 0.07
+# Minimum per-character softmax after CTC collapse. Chance over 37 symbols is ~0.027.
+# 0.70 is the high-trust floor from board OCR logs: every kept glyph must clear it.
+MIN_OCR_CONFIDENCE = 0.70
 # The INT8 OCR score for the same crop sits just under the float score.
 INT8_OCR_MARGIN = 0.005
 
@@ -60,22 +60,37 @@ def decode_characters(
     steps: list[list[float]],
     alphabet: str = PLATE_ALPHABET,
     pad: str = PLATE_PAD,
-) -> tuple[str, float, list[float]]:
-    """Turn per-character logits into text, mean confidence, and per-char probs."""
+) -> tuple[str, float, list[float], list[float], float]:
+    """CTC-greedy decode: drop blanks, collapse repeats, report min char conf.
+
+    Returns text, min confidence, per-char confidences, per-char top1-top2
+    margins, and the worst blank-competition uncertainty anywhere in the steps.
+    """
     if not steps:
-        return "", 0.0, []
+        return "", 0.0, [], [], 0.0
     chars: list[str] = []
     confidences: list[float] = []
+    margins: list[float] = []
+    blank_uncertainty = 0.0
     for step in steps:
-        index, confidence = _softmax_choice(step)
+        index, confidence, margin, probs = _step_choice(step)
         character = alphabet[index] if index < len(alphabet) else pad
         if character == pad:
+            second = _second_best_non_blank(probs, alphabet, pad)
+            if second is not None:
+                blank_uncertainty = max(blank_uncertainty, second)
+            continue
+        if chars and character == chars[-1]:
+            if confidence > confidences[-1]:
+                confidences[-1] = confidence
+                margins[-1] = margin
             continue
         chars.append(character)
         confidences.append(confidence)
+        margins.append(margin)
     if not chars:
-        return "", 0.0, []
-    return "".join(chars), sum(confidences) / len(confidences), confidences
+        return "", 0.0, [], [], blank_uncertainty
+    return "".join(chars), min(confidences), confidences, margins, blank_uncertainty
 
 
 def ocr_floor(minimum: float, runtime: str) -> float:
@@ -93,7 +108,7 @@ def accept_plate(
     min_char_confidence: float | None = None,
     char_confidences: list[float] | tuple[float, ...] | None = None,
 ) -> bool:
-    """Keep a read only when every character and the mean clear their floors."""
+    """Keep a read when min character confidence clears the floor(s)."""
     if not text:
         return False
     if min_char_confidence is not None and char_confidences is not None:
@@ -133,12 +148,58 @@ def center_to_corners(
     return cx - width / 2, cy - height / 2, cx + width / 2, cy + height / 2
 
 
-def _softmax_choice(values: list[float]) -> tuple[int, float]:
+def _step_choice(values: list[float]) -> tuple[int, float, float, list[float]]:
+    """Argmax with confidence and top1-top2 margin."""
+    if not values:
+        return 0, 0.0, 0.0, []
+    if _looks_like_probabilities(values):
+        probs = [float(value) for value in values]
+    else:
+        probs = _softmax_probs(values)
+    index = max(range(len(probs)), key=probs.__getitem__)
+    ordered = sorted(probs, reverse=True)
+    top1 = ordered[0] if ordered else 0.0
+    top2 = ordered[1] if len(ordered) > 1 else 0.0
+    return index, float(probs[index]), max(0.0, top1 - top2), probs
+
+
+def _second_best_non_blank(
+    probs: list[float],
+    alphabet: str,
+    pad: str,
+) -> float | None:
+    """Probability of the best non-blank class when blank won the step."""
+    pad_index = alphabet.find(pad)
+    best = None
+    for index, value in enumerate(probs):
+        if index == pad_index:
+            continue
+        if index >= len(alphabet):
+            continue
+        if best is None or value > best:
+            best = float(value)
+    return best
+
+
+def _looks_like_probabilities(values: list[float]) -> bool:
+    """CCT exports NHWC probs that already sum to ~1 per timestep."""
+    if any(value < -1e-4 or value > 1.0 + 1e-3 for value in values):
+        return False
+    total = sum(values)
+    return 0.75 <= total <= 1.25
+
+
+def _softmax_probs(values: list[float]) -> list[float]:
     peak = max(values)
     scores = [math.exp(value - peak) for value in values]
-    total = sum(scores)
-    index = max(range(len(values)), key=values.__getitem__)
-    return index, scores[index] / total
+    total = sum(scores) or 1.0
+    return [score / total for score in scores]
+
+
+def _softmax_choice(values: list[float]) -> tuple[int, float]:
+    probs = _softmax_probs(values)
+    index = max(range(len(probs)), key=probs.__getitem__)
+    return index, probs[index]
 
 
 def _iou(

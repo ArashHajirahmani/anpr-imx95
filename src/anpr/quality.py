@@ -88,7 +88,7 @@ def enhance_crop(bgr: object, settings: EnhancerSettings) -> object:
 
 
 def log_quality_reject(stream: str, reason: str, metrics: QualityMetrics) -> None:
-    logger.debug(
+    logger.info(
         "crop quality reject %s reason=%s lap=%.1f bright=%.1f contrast=%.1f",
         stream,
         reason,

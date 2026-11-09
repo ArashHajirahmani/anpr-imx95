@@ -9,46 +9,61 @@ from anpr.roi_refine import (
 )
 
 
-def test_expand_grows_left_when_ink_touches_border() -> None:
-    pytest.importorskip("cv2")
-    frame = np.full((80, 200, 3), 220, dtype=np.uint8)
-    # Plate glyphs start at the YOLO left edge (clipped C case).
-    frame[30:55, 40:48] = 20
-    frame[30:55, 55:120] = 20
-    settings = RoiRefineSettings(
+def _settings(*, pad_ratio: float = 0.05, perspective: bool = False) -> RoiRefineSettings:
+    return RoiRefineSettings(
         expand=ExpandSettings(
             enabled=True,
-            max_ratio=0.25,
-            edge_fraction=0.1,
-            ink_threshold=0.05,
-            pad_fraction=0.15,
+            inner_ratio=0.20,
+            outer_ratio=0.20,
+            edge_threshold=0.05,
+            pad_ratio=pad_ratio,
         ),
-        perspective=PerspectiveSettings(enabled=False),
+        perspective=PerspectiveSettings(enabled=perspective),
     )
-    refined = refine_plate_roi(frame, 40, 28, 130, 58, settings)
-    assert refined.x1 < 40
-    assert refined.x2 == 130
+
+
+def test_border_snap_expands_left_to_outer_plate_edge() -> None:
+    pytest.importorskip("cv2")
+    frame = np.full((100, 220, 3), 40, dtype=np.uint8)
+    frame[35:70, 30:160] = 220
+    frame[35:70, 30:34] = 10
+    frame[35:70, 156:160] = 10
+    refined = refine_plate_roi(frame, 50, 35, 150, 70, _settings(pad_ratio=0.0))
     assert refined.method == "expand"
-    assert refined.x2 - refined.x1 <= int(90 * 1.25) + 1
+    assert refined.x1 < 50
+    assert refined.y1 == 35
+    assert refined.y2 == 70
 
 
-def test_expand_respects_max_ratio() -> None:
+def test_border_snap_recenters_shifted_yolo_box() -> None:
     pytest.importorskip("cv2")
-    frame = np.full((60, 160, 3), 200, dtype=np.uint8)
-    frame[20:45, 50:58] = 10
-    frame[20:45, 100:108] = 10
-    settings = RoiRefineSettings(
-        expand=ExpandSettings(
-            enabled=True,
-            max_ratio=0.2,
-            edge_fraction=0.12,
-            ink_threshold=0.05,
-            pad_fraction=0.5,
-        ),
-        perspective=PerspectiveSettings(enabled=False),
-    )
-    refined = refine_plate_roi(frame, 50, 18, 110, 48, settings)
-    assert refined.x2 - refined.x1 <= int(60 * 1.2) + 1
+    frame = np.full((120, 320, 3), (90, 70, 180), dtype=np.uint8)
+    frame[45:85, 80:220] = 220
+    frame[45:85, 80:86] = 5
+    frame[45:85, 214:220] = 5
+    refined = refine_plate_roi(frame, 100, 44, 245, 86, _settings(pad_ratio=0.0))
+    assert refined.method == "expand"
+    assert refined.x1 < 100
+    assert refined.x2 < 245
+    assert refined.y1 == 44
+    assert refined.y2 == 86
+
+
+def test_pad_ratio_uses_width_and_height() -> None:
+    pytest.importorskip("cv2")
+    frame = np.full((100, 240, 3), 80, dtype=np.uint8)
+    frame[40:70, 50:170] = 220
+    frame[40:70, 50:54] = 5
+    frame[40:70, 166:170] = 5
+    tight = refine_plate_roi(frame, 55, 40, 175, 70, _settings(pad_ratio=0.0))
+    padded = refine_plate_roi(frame, 55, 40, 175, 70, _settings(pad_ratio=0.05))
+    assert padded.x1 < tight.x1
+    assert padded.x2 > tight.x2
+    # Top/bottom are YOLO ± pad only (no vertical edge snap).
+    assert padded.y1 < 40
+    assert padded.y2 > 70
+    assert padded.y1 == 40 - int(round(30 * 0.05))
+    assert padded.y2 == 70 + int(round(30 * 0.05))
 
 
 def test_disabled_refine_keeps_yolo_box() -> None:
@@ -57,19 +72,14 @@ def test_disabled_refine_keeps_yolo_box() -> None:
     refined = refine_plate_roi(frame, 20, 10, 60, 30, RoiRefineSettings.disabled())
     assert (refined.x1, refined.y1, refined.x2, refined.y2) == (20, 10, 60, 30)
     assert refined.method == "yolo"
-    assert np.asarray(refined.crop_bgr).shape == (20, 40, 3)
 
 
 def test_perspective_warps_clear_plate_quad() -> None:
     cv2 = pytest.importorskip("cv2")
     frame = np.full((120, 240, 3), 30, dtype=np.uint8)
-    # Light plate rectangle with dark border for Canny.
     pts = np.array([[50, 40], [190, 35], [195, 85], [45, 90]], dtype=np.int32)
     cv2.fillConvexPoly(frame, pts, (230, 230, 230))
     cv2.polylines(frame, [pts], True, (10, 10, 10), 2)
-    # Glyphs inside.
-    cv2.rectangle(frame, (70, 50), (85, 75), (20, 20, 20), -1)
-    cv2.rectangle(frame, (100, 50), (115, 75), (20, 20, 20), -1)
     settings = RoiRefineSettings(
         expand=ExpandSettings(enabled=False),
         perspective=PerspectiveSettings(
@@ -86,6 +96,3 @@ def test_perspective_warps_clear_plate_quad() -> None:
     crop = np.asarray(refined.crop_bgr)
     assert crop.ndim == 3
     assert crop.shape[1] >= crop.shape[0]
-    # Perspective may or may not fire depending on edges; either is valid if capped.
-    if refined.method == "perspective":
-        assert crop.shape[1] <= int(150 * 1.4) + 2

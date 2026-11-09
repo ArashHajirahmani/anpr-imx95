@@ -7,10 +7,10 @@ from anpr.types import Frame, PlateBox
 JPEG = b"\xff\xd8\xff\xd9"
 
 
-def test_record_keeps_newest_plates() -> None:
-    store = ResultStore(4)
+def test_record_keeps_two_distinct_slots() -> None:
+    store = ResultStore(2)
     seen: dict[str, set[str]] = {}
-    for index, text in enumerate(["A", "B", "C", "D", "E"]):
+    for index, text in enumerate(["AAA111", "BBB222", "CCC333"]):
         fresh = store.record(
             _frame(index),
             [_plate(text)],
@@ -20,48 +20,87 @@ def test_record_keeps_newest_plates() -> None:
         )
         assert [item.text for item in fresh] == [text]
     history = store.history()
-    assert [item.text for item in history] == ["E", "D", "C", "B"]
-    assert history[0].jpeg == JPEG + bytes([4])
+    assert [item.text for item in history] == ["CCC333", "BBB222"]
     latest = store.latest()
     assert latest is not None
-    assert latest.frame_id == 5
-    assert latest.plates[0].text == "E"
+    assert latest.frame_id == 3
+    assert latest.plates[0].text == "CCC333"
 
 
-def test_repeats_are_kept_in_history() -> None:
-    store = ResultStore(4)
+def test_partial_match_upgrades_same_slot() -> None:
+    store = ResultStore(2)
+    seen: dict[str, set[str]] = {}
+    for text, confidence in [
+        ("AKW568", 0.90),
+        ("CAKW568", 0.80),
+        ("AKW568", 0.95),
+        ("AKW568", 0.99),
+    ]:
+        store.record(
+            _frame(),
+            [_plate(text, confidence=confidence)],
+            min_confidence=0.07,
+            jpeg=JPEG,
+            last_texts=seen,
+        )
+    history = store.history()
+    assert len(history) == 1
+    assert history[0].text == "CAKW568"
+    assert history[0].confidence == 0.99
+
+
+def test_higher_conf_correct_spelling_beats_garbage() -> None:
+    store = ResultStore(2)
     seen: dict[str, set[str]] = {}
     store.record(
         _frame(1),
-        [_plate("ABC123")],
+        [_plate("AXKW568", confidence=0.77)],
         min_confidence=0.07,
         jpeg=JPEG,
         last_texts=seen,
     )
-    repeated = store.record(
+    store.record(
         _frame(2),
-        [_plate("ABC123", x=8)],
+        [_plate("CAKW568", confidence=0.94)],
         min_confidence=0.07,
         jpeg=JPEG + b"\x01",
         last_texts=seen,
     )
-    assert [item.text for item in repeated] == ["ABC123"]
-    assert len(store.history()) == 2
-    missed = store.record(
+    store.record(
         _frame(3),
-        [_plate("ABC123", confidence=0.01)],
+        [_plate("AXKW568", confidence=0.80)],
         min_confidence=0.07,
         jpeg=JPEG + b"\x02",
         last_texts=seen,
     )
-    assert missed == []
-    latest = store.latest()
-    assert latest is not None
-    assert latest.plates == ()
+    history = store.history()
+    assert len(history) == 1
+    assert history[0].text == "CAKW568"
+    assert history[0].confidence == 0.94
+
+
+def test_near_duplicate_does_not_open_second_slot() -> None:
+    store = ResultStore(2)
+    seen: dict[str, set[str]] = {}
+    store.record(
+        _frame(1),
+        [_plate("AKW568", confidence=0.8)],
+        min_confidence=0.07,
+        jpeg=JPEG,
+        last_texts=seen,
+    )
+    store.record(
+        _frame(2),
+        [_plate("AMW568", confidence=0.95)],
+        min_confidence=0.07,
+        jpeg=JPEG + b"\x01",
+        last_texts=seen,
+    )
+    assert [item.text for item in store.history()] == ["AMW568"]
 
 
 def test_weak_character_is_not_published() -> None:
-    store = ResultStore(4)
+    store = ResultStore(2)
     seen: dict[str, set[str]] = {}
     fresh = store.record(
         _frame(),
@@ -84,7 +123,7 @@ def test_weak_character_is_not_published() -> None:
 
 
 def test_confidence_floor_is_inclusive() -> None:
-    store = ResultStore(4)
+    store = ResultStore(2)
     seen: dict[str, set[str]] = {}
     store.record(
         _frame(),
@@ -97,7 +136,7 @@ def test_confidence_floor_is_inclusive() -> None:
 
 
 def test_two_plates_keep_both_boxes() -> None:
-    store = ResultStore(4)
+    store = ResultStore(2)
     seen: dict[str, set[str]] = {}
     fresh = store.record(
         _frame(),
@@ -116,12 +155,12 @@ def test_two_plates_keep_both_boxes() -> None:
         {"char": "B", "confidence": 0.9},
         {"char": "B", "confidence": 0.9},
     ]
-    assert [item.text for item in store.history()] == ["AAA", "BBB"]
+    assert [item.text for item in store.history()] == ["BBB", "AAA"]
     assert latest.plates[0].box.width == 30
 
 
 def test_frame_timing_is_published_with_the_plate() -> None:
-    store = ResultStore(4)
+    store = ResultStore(2)
     seen: dict[str, set[str]] = {}
     store.record(
         _frame(),
@@ -129,15 +168,17 @@ def test_frame_timing_is_published_with_the_plate() -> None:
         min_confidence=0.07,
         jpeg=JPEG,
         last_texts=seen,
-        timing=FrameTiming(977.24, 189.06),
+        timing=FrameTiming(977.24, 189.06, "npu"),
     )
     latest = store.latest()
     assert latest is not None
     body = latest.json()
     assert body["detector_ms"] == 977.2
     assert body["reader_ms"] == 189.1
+    assert body["runtime"] == "npu"
     assert store.history()[0].json()["detector_ms"] == 977.2
     assert store.history()[0].json()["reader_ms"] == 189.1
+    assert store.history()[0].json()["runtime"] == "npu"
 
 
 def test_history_image_is_the_plate_crop() -> None:
@@ -146,7 +187,7 @@ def test_history_image_is_the_plate_crop() -> None:
     image = numpy.zeros((8, 12, 3), dtype=numpy.uint8)
     image[2:6, 3:9] = (20, 40, 60)
     frame = Frame("videoCapture", image.tobytes(), 1, 12, 8)
-    store = ResultStore(4)
+    store = ResultStore(2)
     store.record(
         frame,
         [PlateRead("ABC123", 0.9, PlateBox(3, 2, 6, 4, 0.8))],
@@ -174,7 +215,7 @@ def test_history_image_prefers_pre_ocr_enhancer_output() -> None:
     frame_image[2:6, 3:9] = (20, 40, 60)
     pre_ocr = numpy.full((5, 7, 3), (90, 100, 110), dtype=numpy.uint8)
     frame = Frame("videoCapture", frame_image.tobytes(), 1, 12, 8)
-    store = ResultStore(4)
+    store = ResultStore(2)
     store.record(
         frame,
         [
@@ -213,19 +254,27 @@ def test_encode_jpeg_round_trip() -> None:
     assert decoded.shape == (4, 6, 3)
 
 
-def test_history_limit_fifty() -> None:
-    store = ResultStore(50)
+def test_better_crop_replaces_slot_image() -> None:
+    store = ResultStore(2)
     seen: dict[str, set[str]] = {}
-    for index in range(55):
-        store.record(
-            _frame(index),
-            [_plate(f"P{index}")],
-            min_confidence=0.07,
-            jpeg=JPEG + bytes([index % 255]),
-            last_texts=seen,
-        )
-    assert len(store.history()) == 50
-    assert store.history()[0].text == "P54"
+    store.record(
+        _frame(1),
+        [_plate("AKW568", confidence=0.7)],
+        min_confidence=0.07,
+        jpeg=JPEG + b"\x01",
+        last_texts=seen,
+    )
+    first = store.history()[0].jpeg
+    store.record(
+        _frame(2),
+        [_plate("AKW568", confidence=0.95)],
+        min_confidence=0.07,
+        jpeg=JPEG + b"\x02",
+        last_texts=seen,
+    )
+    assert len(store.history()) == 1
+    assert store.history()[0].confidence == 0.95
+    assert store.history()[0].jpeg != first
 
 
 def _frame(stamp: int = 1) -> Frame:

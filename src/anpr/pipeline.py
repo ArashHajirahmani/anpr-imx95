@@ -204,7 +204,10 @@ def _frame_timing(stats: object) -> FrameTiming | None:
         return None
     if not isinstance(detector_ms, int | float) or not isinstance(reader_ms, int | float):
         return None
-    return FrameTiming(float(detector_ms), float(reader_ms))
+    runtime = getattr(stats, "runtime", "cpu")
+    if not isinstance(runtime, str) or runtime not in {"cpu", "npu"}:
+        runtime = "cpu"
+    return FrameTiming(float(detector_ms), float(reader_ms), runtime)
 
 
 def _reader_outcome(name: str, outcome: object) -> tuple[list[object] | None, object]:

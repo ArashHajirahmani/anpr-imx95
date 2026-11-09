@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 
+from anpr.plate_match import clearly_better, same_identity
 from anpr.recognize import PlateRead
 from anpr.types import PlateBox
 
@@ -36,6 +37,8 @@ class _Track:
     samples: deque[VoteSample]
     box: PlateBox
     sticky: str = ""
+    sticky_confidence: float = 0.0
+    sticky_quality: float = 0.0
 
 
 class PlateVoteTracker:
@@ -44,11 +47,15 @@ class PlateVoteTracker:
     def __init__(self) -> None:
         self._tracks: dict[str, list[_Track]] = {}
         self._stream_sticky: dict[str, str] = {}
+        self._stream_sticky_confidence: dict[str, float] = {}
+        self._stream_sticky_quality: dict[str, float] = {}
 
     def consider(self, stream: str, read: PlateRead) -> PlateRead | None:
         track = self._match(stream, read.box)
         if not track.sticky:
             track.sticky = self._stream_sticky.get(stream, "")
+            track.sticky_confidence = self._stream_sticky_confidence.get(stream, 0.0)
+            track.sticky_quality = self._stream_sticky_quality.get(stream, 0.0)
         weight = _sample_weight(read)
         track.samples.append(VoteSample(read=read, weight=weight))
         track.box = read.box
@@ -71,6 +78,17 @@ class PlateVoteTracker:
                     track,
                     _majority_release(track, need=VOTE_NEED),
                 )
+            if same_identity(track.sticky, read.text) and clearly_better(
+                track.sticky_confidence,
+                read.confidence,
+                current_quality=track.sticky_quality,
+                new_quality=float(read.laplacian_var or 0.0),
+            ):
+                # Clearer OCR of the same plate (AXKW568→CAKW568 @ higher conf).
+                # Require two agreeing better reads; do not re-emit sticky garbage.
+                if _agreeing_count(track, read.text) >= VOTE_NEED:
+                    return self._commit(stream, track, read)
+                return None
             if _near_duplicate(track.sticky, read.text) or upgrade is None:
                 return self._commit(
                     stream,
@@ -96,7 +114,11 @@ class PlateVoteTracker:
         if read is None:
             return None
         track.sticky = read.text
+        track.sticky_confidence = float(read.confidence)
+        track.sticky_quality = float(read.laplacian_var or 0.0)
         self._stream_sticky[stream] = read.text
+        self._stream_sticky_confidence[stream] = track.sticky_confidence
+        self._stream_sticky_quality[stream] = track.sticky_quality
         return read
 
     def _match(self, stream: str, box: PlateBox) -> _Track:
@@ -114,6 +136,8 @@ class PlateVoteTracker:
         sticky = self._stream_sticky.get(stream, "")
         if sticky:
             track.sticky = sticky
+            track.sticky_confidence = self._stream_sticky_confidence.get(stream, 0.0)
+            track.sticky_quality = self._stream_sticky_quality.get(stream, 0.0)
         tracks.append(track)
         if len(tracks) > 16:
             del tracks[:-16]

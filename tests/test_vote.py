@@ -108,3 +108,13 @@ def test_truncation_does_not_replace_sticky() -> None:
     for conf in (0.99, 0.98, 0.97):
         out = tracker.consider("cam", _read("AKW58", conf))
         assert out is None or out.text == "AKW568"
+
+
+def test_clearer_near_duplicate_upgrades_with_two_votes() -> None:
+    tracker = PlateVoteTracker()
+    assert tracker.consider("cam", _read("AXKW568", 0.77)) is None
+    assert tracker.consider("cam", _read("AXKW568", 0.78)).text == "AXKW568"
+    assert tracker.consider("cam", _read("CAKW568", 0.94)) is None
+    out = tracker.consider("cam", _read("CAKW568", 0.95))
+    assert out is not None
+    assert out.text == "CAKW568"

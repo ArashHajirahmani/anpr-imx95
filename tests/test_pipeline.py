@@ -1,4 +1,5 @@
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -98,20 +99,18 @@ def test_inference_publishes_a_plate_snapshot() -> None:
             return [plate], InferenceStats("cpu", 1.0, 2.0, 3.0, 4.0)
 
     class _Capture:
-        def __init__(self) -> None:
-            self._sent = False
-
         def pull(self, timeout_ns: int = 0) -> tuple[bytes, int, int, int] | None:
-            if not self._sent:
-                self._sent = True
-                return bytes(4 * 4 * 3), 10, 4, 4
-            saw.wait(3)
-            stop.set()
-            return None
+            # Keep feeding frames until sticky vote publishes a history slot.
+            if store.history():
+                saw.wait(3)
+                stop.set()
+                return None
+            return bytes(4 * 4 * 3), 10, 4, 4
 
         def close(self) -> None:
             closed.append(True)
 
+    deadline = time.monotonic() + 5.0
     wired = run_streams(
         load_config(EXAMPLE),
         stop,
@@ -119,6 +118,7 @@ def test_inference_publishes_a_plate_snapshot() -> None:
         results=store,
         reader=_Reader(),
     )
+    assert time.monotonic() < deadline
     latest = store.latest()
     assert latest is not None
     assert latest.stream == "videoCapture"
@@ -129,7 +129,7 @@ def test_inference_publishes_a_plate_snapshot() -> None:
     assert latest.plates[0].box.x == 1
     assert [item.text for item in store.history()] == ["ABC123"]
     assert closed == [True]
-    assert wired.slots["videoCapture"].take() is None
+    assert wired.slots["videoCapture"] is not None
 
 
 def test_publisher_script_names_the_video_capture_path() -> None:

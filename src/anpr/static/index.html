@@ -6,102 +6,166 @@
 <meta name="color-scheme" content="dark">
 <title>ANPR</title>
 <style>
-  body {
+  html, body {
+    height: 100%;
     margin: 0;
+    overflow: hidden;
     background: #10140f;
     color: #e7f0e4;
     font-family: "DejaVu Sans", sans-serif;
+  }
+  body {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    height: 100vh;
+    height: 100dvh;
   }
   header {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    padding: 0.8rem 1rem 0;
+    padding: 0.3rem 0.55rem 0.15rem;
+    flex: 0 0 auto;
   }
   h1 {
     margin: 0;
-    font-size: 1rem;
+    font-size: 0.75rem;
     font-weight: 600;
     letter-spacing: 0.14em;
   }
-  #status { margin: 0; font-size: 0.95rem; }
+  #status { margin: 0; font-size: 0.75rem; }
   #status.ok { color: #39ff14; }
   #status.wait { color: #d7e0d4; }
   #status.down { color: #ffb020; }
   #error {
-    margin: 0.4rem 1rem 0;
+    margin: 0 0.55rem;
     color: #ffb020;
-    font-size: 0.9rem;
+    font-size: 0.75rem;
   }
+  #error:empty { display: none; }
   main {
     display: grid;
-    grid-template-columns: minmax(12rem, 22rem) minmax(0, 1fr);
-    gap: 1rem;
-    padding: 1rem;
-    height: calc(100vh - 3.5rem);
-    box-sizing: border-box;
+    grid-template-columns: minmax(0, 1fr) minmax(9.5rem, 18vw);
+    gap: 0.45rem;
+    padding: 0.2rem 0.55rem 0.35rem;
+    min-height: 0;
+    min-width: 0;
   }
-  .live { min-width: 0; overflow: auto; }
+  .live {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
   .frame {
     position: relative;
     background: #0a0c0a;
     overflow: hidden;
+    min-height: 0;
   }
-  .frame.waiting { min-height: 16rem; }
-  .history .frame.waiting { min-height: 6rem; }
-  .frame img { width: 100%; height: auto; display: block; }
+  .live .frame {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .live .frame img {
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    display: block;
+  }
   .boxes { position: absolute; inset: 0; pointer-events: none; }
   .box {
     position: absolute;
     border: 3px solid #39ff14;
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.85);
     box-sizing: border-box;
   }
-  #plate {
-    display: inline-block;
-    margin: 0.7rem 0 0.3rem;
-    padding: 0.08em 0.28em;
-    background: #f4e04a;
-    color: #161616;
+  .box-label {
+    position: absolute;
+    left: 50%;
+    top: calc(100% + 0.2rem);
+    transform: translateX(-50%);
+    margin: 0;
+    color: #39ff14;
     font-family: "DejaVu Sans Mono", monospace;
-    font-size: clamp(2.6rem, 7vw, 5.5rem);
+    font-size: clamp(0.95rem, 1.8vw, 1.45rem);
     letter-spacing: 0.08em;
-    line-height: 1.05;
+    text-shadow: 0 0 2px #000, 0 1px 2px #000, 1px 0 2px #000;
+    white-space: nowrap;
+    pointer-events: none;
   }
-  #plate.empty { background: transparent; color: #7d8b7a; }
-  #meta {
-    display: grid;
-    grid-template-columns: max-content 1fr;
-    gap: 0.28rem 1.1rem;
-    margin: 0.6rem 0 0;
-    max-width: 36rem;
-    color: #d5e0d2;
-    font-size: 0.95rem;
+  .meta-overlay {
+    position: absolute;
+    left: 0.55rem;
+    top: 0.45rem;
+    margin: 0;
+    padding: 0.35rem 0.5rem;
+    color: #39ff14;
+    font-family: "DejaVu Sans Mono", monospace;
+    font-size: clamp(0.68rem, 1.05vw, 0.88rem);
+    line-height: 1.4;
+    letter-spacing: 0.02em;
+    text-shadow: 0 0 2px #000, 0 1px 2px #000, 1px 0 2px #000;
+    background: rgba(0, 0, 0, 0.45);
+    pointer-events: none;
+    white-space: pre;
   }
-  #meta dt { margin: 0; color: #8b9788; }
-  #meta dd { margin: 0; }
-  #meta dt.timing,
-  #meta dd.timing { color: #f4e04a; }
+  .meta-overlay.hidden { display: none; }
   .history {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: 0.35rem;
     min-height: 0;
+    min-width: 0;
+    overflow-x: hidden;
     overflow-y: auto;
-    padding-right: 0.25rem;
+    scrollbar-width: thin;
+    scrollbar-color: #3a4638 transparent;
   }
-  .history article { background: #181c17; padding: 0.5rem; }
+  .history article {
+    background: #181c17;
+    padding: 0.3rem;
+    flex: 0 0 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+  .history .frame {
+    aspect-ratio: 16 / 7;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .history .frame img {
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    display: block;
+  }
   .hist-plate {
-    margin: 0.35rem 0 0;
+    margin: 0;
     font-family: "DejaVu Sans Mono", monospace;
-    font-size: 1.35rem;
+    font-size: 0.95rem;
     letter-spacing: 0.06em;
+    color: #39ff14;
+    flex: 0 0 auto;
   }
-  .hist-meta { margin: 0.15rem 0 0; color: #b7c4b4; font-size: 0.8rem; }
+  .hist-meta {
+    margin: 0;
+    color: #b7c4b4;
+    font-size: 0.65rem;
+    flex: 0 0 auto;
+  }
   footer {
-    padding: 0 1rem 1rem;
+    padding: 0.15rem 0.55rem 0.3rem;
     color: #7d8b7a;
-    font-size: 0.75rem;
+    font-size: 0.65rem;
   }
 </style>
 </head>
@@ -112,32 +176,38 @@
 </header>
 <p id="error">waiting for anpr api</p>
 <main>
-  <section id="history" class="history"></section>
   <section class="live">
     <div id="live-frame" class="frame waiting">
       <img id="live-image" alt="">
       <div id="live-boxes" class="boxes"></div>
+      <pre id="live-meta" class="meta-overlay hidden"></pre>
     </div>
-    <p id="plate" class="empty">—</p>
-    <dl id="meta"></dl>
   </section>
+  <section id="history" class="history" aria-label="Plate history"></section>
 </main>
 <footer id="debug"></footer>
 <script>
+const STATS_HOLD_MS = 5000;
+const HISTORY_SLOTS = 10;
 const page = {
   status: document.getElementById("status"),
   error: document.getElementById("error"),
   liveFrame: document.getElementById("live-frame"),
   liveImage: document.getElementById("live-image"),
   liveBoxes: document.getElementById("live-boxes"),
-  plate: document.getElementById("plate"),
-  meta: document.getElementById("meta"),
+  liveMeta: document.getElementById("live-meta"),
   history: document.getElementById("history"),
   debug: document.getElementById("debug"),
 };
 
 let liveToken = "";
 let historyToken = "";
+let lastLive = null;
+let lastHistory = [];
+let heldStats = null;
+let heldStatsUntil = 0;
+let lastMonoNs = null;
+let measuredFps = null;
 
 function tick() {
   fetch("/api/state", { cache: "no-store" })
@@ -174,8 +244,10 @@ function render(state) {
     page.error.hidden = true;
     page.error.textContent = "";
   }
-  renderLive(state.latest);
-  renderHistory(state.history, state.history_limit || 4);
+  lastHistory = state.history || [];
+  renderLive(state.latest, lastHistory);
+  const limit = Math.min(HISTORY_SLOTS, state.history_limit || HISTORY_SLOTS);
+  renderHistory(lastHistory, limit);
   const frameId = state.latest ? state.latest.frame_id : "none";
   page.debug.textContent = [
     state.ok ? "api up" : "api down",
@@ -185,40 +257,108 @@ function render(state) {
   ].join(" · ");
 }
 
-function renderLive(latest) {
+function renderLive(latest, history) {
+  lastLive = latest;
+  const judged = (history && history[0]) || null;
   if (!latest || !latest.image) {
     page.liveFrame.classList.add("waiting");
     page.liveImage.removeAttribute("src");
     page.liveBoxes.replaceChildren();
-    page.plate.textContent = "—";
-    page.plate.classList.add("empty");
-    page.meta.textContent = "";
     liveToken = "";
+    paintMeta();
     return;
   }
   page.liveFrame.classList.remove("waiting");
   if (liveToken !== String(latest.frame_id)) {
     liveToken = String(latest.frame_id);
     page.liveImage.src = latest.image;
+    updateFps(latest);
   }
   const plates = latest.plates || [];
-  drawBoxes(page.liveBoxes, plates, latest.width, latest.height);
-  if (!plates.length) {
-    page.plate.textContent = "—";
-    page.plate.classList.add("empty");
-    fillMeta(page.meta, frameRows(latest).concat([{ label: "Plate", value: "none" }]));
+  const livePlate = plates.length ? plates[0] : null;
+  // Box + judged text only on frames that report a plate rectangle.
+  if (livePlate) {
+    const label = (judged && judged.text) || livePlate.text || "";
+    drawBoxes(page.liveBoxes, plates, latest.width, latest.height, label);
+    holdStats(livePlate, latest, measuredFps);
+  } else {
+    page.liveBoxes.replaceChildren();
+  }
+  paintMeta();
+}
+
+function updateFps(latest) {
+  const mono = Number(latest.monotonic_ns);
+  if (Number.isFinite(mono) && lastMonoNs !== null && mono > lastMonoNs) {
+    const seconds = (mono - lastMonoNs) / 1e9;
+    if (seconds > 0) {
+      measuredFps = 1 / seconds;
+    }
+  }
+  if (Number.isFinite(mono)) {
+    lastMonoNs = mono;
+  }
+}
+
+function holdStats(plate, latest, fps) {
+  heldStats = {
+    text: formatStats(plate, latest, fps),
+  };
+  heldStatsUntil = Date.now() + STATS_HOLD_MS;
+}
+
+function paintMeta() {
+  if (!heldStats || Date.now() > heldStatsUntil) {
+    heldStats = null;
+    page.liveMeta.classList.add("hidden");
+    page.liveMeta.textContent = "";
     return;
   }
-  page.plate.classList.remove("empty");
-  page.plate.textContent = plates[0].text;
-  const rows = plateRows(plates[0]).concat(timingRows(latest), frameRows(latest));
-  if (plates.length > 1) {
-    rows.push({
-      label: "Other plates",
-      value: plates.slice(1).map((item) => item.text).join(", "),
-    });
+  page.liveMeta.classList.remove("hidden");
+  page.liveMeta.textContent = heldStats.text;
+}
+
+function formatStats(plate, latest, fps) {
+  const box = plate.box || {};
+  const detConf = finiteNumber(box.confidence);
+  const ocrConf = minCharConfidence(plate) || finiteNumber(plate.confidence);
+  const pos = numberPair(box.x, box.y);
+  const size = sizePair(box.width, box.height);
+  const device = runtimeLabel(latest && latest.runtime);
+  const detMs = wholeMs(latest && latest.detector_ms);
+  const ocrMs = wholeMs(latest && latest.reader_ms);
+  const fpsText = Number.isFinite(fps) ? fps.toFixed(1) : "";
+  const when = shortClock(latest && latest.time);
+  const frame = sizePair(latest && latest.width, latest && latest.height);
+
+  const blocks = [];
+  blocks.push(
+    "DETECTION\n"
+    + "Det: " + (detConf || "—") + " | OCR: " + (ocrConf || "—") + "\n"
+    + "Pos: " + (pos || "—") + " | " + (size || "—"),
+  );
+  blocks.push(
+    "PERFORMANCE\n"
+    + "Det: " + (detMs || "—") + " |  " + device + "\n"
+    + "OCR: " + (ocrMs || "—") + " |  " + device + "\n"
+    + "FPS: " + (fpsText || "—"),
+  );
+  blocks.push(
+    "STREAM\n"
+    + "H.264 | " + (frame || "—") + "\n"
+    + (when || "—"),
+  );
+  return blocks.join("\n\n");
+}
+
+function runtimeLabel(value) {
+  if (value === "npu") {
+    return "NPU";
   }
-  fillMeta(page.meta, rows);
+  if (value === "cpu") {
+    return "CPU";
+  }
+  return "NPU/CPU";
 }
 
 function minCharConfidence(plate) {
@@ -235,33 +375,34 @@ function minCharConfidence(plate) {
       return lowest.toFixed(2);
     }
   }
-  const fallback = Number(plate && plate.confidence);
-  return Number.isFinite(fallback) ? fallback.toFixed(2) : "";
+  return finiteNumber(plate && plate.confidence);
 }
 
-function plateRows(plate) {
-  const box = plate.box || {};
-  return [
-    { label: "Character confidence", value: minCharConfidence(plate) },
-    { label: "Detector confidence", value: Number(box.confidence).toFixed(2) },
-    { label: "Position", value: box.x + ", " + box.y },
-    { label: "Size", value: box.width + " × " + box.height + " px" },
-  ];
+function finiteNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(2) : "";
 }
 
-function timingRows(view) {
-  return [
-    { label: "Detector time", value: milliseconds(view.detector_ms), timing: true },
-    { label: "Plate read time", value: milliseconds(view.reader_ms), timing: true },
-  ];
+function numberPair(x, y) {
+  if (!Number.isFinite(Number(x)) || !Number.isFinite(Number(y))) {
+    return "";
+  }
+  return Number(x) + "," + Number(y);
 }
 
-function frameRows(view) {
-  return [
-    { label: "Stream", value: view.stream || "" },
-    { label: "Frame", value: view.width + " × " + view.height },
-    { label: "Time", value: clock(view.time) },
-  ];
+function sizePair(width, height) {
+  if (!Number.isFinite(Number(width)) || !Number.isFinite(Number(height))) {
+    return "";
+  }
+  return Number(width) + "x" + Number(height);
+}
+
+function wholeMs(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return "";
+  }
+  return Math.round(number) + "ms";
 }
 
 function milliseconds(value) {
@@ -272,68 +413,121 @@ function milliseconds(value) {
   return number.toFixed(1) + " ms";
 }
 
-function clock(value) {
+function shortClock(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return value || "";
   }
   return date.toLocaleString(undefined, {
-    year: "numeric",
     month: "short",
     day: "numeric",
-    hour: "2-digit",
+    hour: "numeric",
     minute: "2-digit",
     second: "2-digit",
   });
 }
 
-function fillMeta(target, rows) {
-  target.replaceChildren();
-  for (const row of rows) {
-    if (!row.value) {
-      continue;
+function imageDrawRect() {
+  const image = page.liveImage;
+  const frame = page.liveFrame;
+  const frameRect = frame.getBoundingClientRect();
+  const imageRect = image.getBoundingClientRect();
+  if (
+    !image.complete
+    || !image.naturalWidth
+    || !image.naturalHeight
+    || imageRect.width < 1
+    || imageRect.height < 1
+  ) {
+    return null;
+  }
+  return {
+    offsetX: imageRect.left - frameRect.left,
+    offsetY: imageRect.top - frameRect.top,
+    drawW: imageRect.width,
+    drawH: imageRect.height,
+  };
+}
+
+function drawBoxes(layer, plates, width, height, labelText) {
+  layer.replaceChildren();
+  const sourceW = width || 0;
+  const sourceH = height || 0;
+  if (!sourceW || !sourceH || !plates.length) {
+    return;
+  }
+  const geometry = imageDrawRect();
+  const offsetX = geometry ? geometry.offsetX : 0;
+  const offsetY = geometry ? geometry.offsetY : 0;
+  const drawW = geometry ? geometry.drawW : sourceW;
+  const drawH = geometry ? geometry.drawH : sourceH;
+  let labeled = false;
+  for (const plate of plates) {
+    const showLabel = !labeled && labelText;
+    appendBox(
+      layer,
+      plate,
+      sourceW,
+      sourceH,
+      offsetX,
+      offsetY,
+      drawW,
+      drawH,
+      showLabel ? labelText : "",
+    );
+    if (showLabel) {
+      labeled = true;
     }
-    const label = document.createElement("dt");
-    const value = document.createElement("dd");
-    label.textContent = row.label;
-    value.textContent = row.value;
-    if (row.timing) {
-      label.className = "timing";
-      value.className = "timing";
-    }
-    target.append(label, value);
   }
 }
 
-function drawBoxes(layer, plates, width, height) {
-  layer.replaceChildren();
-  if (!width || !height) {
+function appendBox(layer, plate, width, height, offsetX, offsetY, drawW, drawH, labelText) {
+  const box = plate.box;
+  if (!box || box.width <= 0 || box.height <= 0) {
     return;
   }
-  for (const plate of plates) {
-    const box = plate.box;
-    if (!box || box.width <= 0 || box.height <= 0) {
-      continue;
-    }
-    const node = document.createElement("div");
-    node.className = "box";
-    node.style.left = (100 * box.x / width) + "%";
-    node.style.top = (100 * box.y / height) + "%";
-    node.style.width = (100 * box.width / width) + "%";
-    node.style.height = (100 * box.height / height) + "%";
-    node.title = plate.text || "";
-    layer.appendChild(node);
+  const node = document.createElement("div");
+  node.className = "box";
+  node.style.left = offsetX + drawW * (box.x / width) + "px";
+  node.style.top = offsetY + drawH * (box.y / height) + "px";
+  node.style.width = drawW * (box.width / width) + "px";
+  node.style.height = drawH * (box.height / height) + "px";
+  node.title = labelText || plate.text || "";
+  if (labelText) {
+    const label = document.createElement("p");
+    label.className = "box-label";
+    label.textContent = labelText;
+    node.appendChild(label);
   }
+  layer.appendChild(node);
 }
 
 function renderHistory(items, limit) {
   const rows = (items || []).slice(0, limit);
-  const token = rows.map((item) => item.id + ":" + item.text + ":" + item.confidence).join(",");
+  const token = rows.map((item) => {
+    if (!item) {
+      return "-";
+    }
+    return item.id + ":" + item.text + ":" + item.confidence + ":" + item.frame_id;
+  }).join(",");
   if (token === historyToken && page.history.childElementCount === rows.length) {
     for (let index = 0; index < rows.length; index += 1) {
-      const image = page.history.children[index].querySelector("img");
-      if (image && rows[index].image) {
-        image.src = rows[index].image;
+      const card = page.history.children[index];
+      const item = rows[index];
+      if (!item) {
+        continue;
+      }
+      const image = card.querySelector("img");
+      const title = card.querySelector(".hist-plate");
+      const meta = card.querySelector(".hist-meta");
+      if (image && item.image) {
+        image.src = item.image + "?v=" + item.frame_id;
+      }
+      if (title) {
+        title.textContent = item.text || "—";
+      }
+      if (meta) {
+        meta.textContent = historyMeta(item);
       }
     }
     return;
@@ -343,6 +537,23 @@ function renderHistory(items, limit) {
   for (const item of rows) {
     page.history.appendChild(historyCard(item));
   }
+}
+
+function historyMeta(item) {
+  const box = item.box || {};
+  const parts = [
+    "Det " + finiteNumber(box.confidence),
+    "OCR " + minCharConfidence(item),
+  ];
+  const detector = milliseconds(item.detector_ms);
+  const reader = milliseconds(item.reader_ms);
+  if (detector) {
+    parts.push(detector);
+  }
+  if (reader) {
+    parts.push(reader);
+  }
+  return parts.join(" · ");
 }
 
 function historyCard(item) {
@@ -356,35 +567,41 @@ function historyCard(item) {
   const meta = document.createElement("p");
   meta.className = "hist-meta";
   if (!item) {
-    frame.classList.add("waiting");
     title.textContent = "—";
     meta.textContent = "waiting";
   } else {
-    image.src = item.image;
+    image.src = item.image + "?v=" + item.frame_id;
     image.alt = item.text || "plate";
     title.textContent = item.text || "—";
-    const box = item.box || {};
-    const parts = [
-      "Character confidence " + minCharConfidence(item),
-      "Detector confidence " + Number(box.confidence).toFixed(2),
-    ];
-    const detector = milliseconds(item.detector_ms);
-    const reader = milliseconds(item.reader_ms);
-    if (detector) {
-      parts.push("Detector time " + detector);
-    }
-    if (reader) {
-      parts.push("Plate read time " + reader);
-    }
-    meta.textContent = parts.join(" · ");
+    meta.textContent = historyMeta(item);
   }
   frame.append(image);
   card.append(frame, title, meta);
   return card;
 }
 
+function redrawLive() {
+  if (!lastLive || !lastLive.image) {
+    return;
+  }
+  const plates = lastLive.plates || [];
+  const livePlate = plates.length ? plates[0] : null;
+  if (livePlate) {
+    const judged = (lastHistory && lastHistory[0]) || null;
+    const label = (judged && judged.text) || livePlate.text || "";
+    drawBoxes(page.liveBoxes, plates, lastLive.width, lastLive.height, label);
+  } else {
+    page.liveBoxes.replaceChildren();
+  }
+  paintMeta();
+}
+
+page.liveImage.addEventListener("load", redrawLive);
+window.addEventListener("resize", redrawLive);
+
 tick();
 setInterval(tick, 500);
+setInterval(paintMeta, 250);
 </script>
 </body>
 </html>

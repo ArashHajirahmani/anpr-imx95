@@ -34,7 +34,7 @@ def test_example_config_loads() -> None:
     assert config.service.inference_fps_limit == 2
     assert config.service.api_socket == "/run/anpr/api.sock"
     assert config.service.jpeg_quality == 80
-    assert config.service.history_limit == 50
+    assert config.service.history_limit == 10
     assert config.web.listen_host == "0.0.0.0"
     assert config.web.listen_port == 8080
     assert config.web.poll_seconds == 0.5

@@ -22,14 +22,16 @@ def test_page_survives_a_missing_api_then_shows_the_plate(tmp_path: Path, caplog
     api: ApiService | None = None
     try:
         page = _get(port, "/")
-        assert b'id="plate"' in page
+        assert b'id="live-meta"' in page
         assert b'id="history"' in page
         assert b'id="error"' in page
         assert b"#39ff14" in page
-        assert b"box.width / width" in page
-        assert b"Character confidence" in page
-        assert b"Detector time" in page
-        assert b"Plate read time" in page
+        assert b"STATS_HOLD_MS" in page
+        assert b"HISTORY_SLOTS" in page
+        assert b"DETECTION" in page
+        assert b"PERFORMANCE" in page
+        assert b"box-label" in page
+        assert b"box-shadow" not in page
         _wait(lambda: "anpr api unreachable" in caplog.text)
         state = json.loads(_get(port, "/api/state"))
         assert state["ok"] is False

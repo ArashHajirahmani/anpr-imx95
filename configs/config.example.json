@@ -68,7 +68,7 @@
     "inference_fps_limit": 2,
     "api_socket": "/run/anpr/api.sock",
     "jpeg_quality": 80,
-    "history_limit": 50
+    "history_limit": 10
   },
   "web": {
     "listen_host": "0.0.0.0",

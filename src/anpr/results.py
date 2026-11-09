@@ -1,15 +1,17 @@
-"""Latest plate snapshot and the short recognition history.
+"""Latest plate snapshot and sticky recognition history.
 
-The inference thread records one JPEG plus the plates on that frame. The API
-serves those bytes. History keeps the newest accepted plates.
+The inference thread records one JPEG plus the plates on that frame. History
+keeps a few distinct plate slots. Partial OCR forms of the same plate update
+the matching slot (best text + best crop) instead of opening a new entry.
 """
 
 import logging
 import threading
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
+from anpr.plate_match import MATCH_ALIASES, merge_text, same_identity
 from anpr.plates import accept_plate
 from anpr.recognize import PlateRead
 from anpr.types import Frame, PlateBox
@@ -23,6 +25,7 @@ class FrameTiming:
 
     detector_ms: float
     reader_ms: float
+    runtime: str = "cpu"
 
 
 @dataclass(frozen=True)
@@ -65,6 +68,7 @@ class HistoryView:
     box: PlateBox
     jpeg: bytes
     timing: FrameTiming | None = None
+    characters: tuple[tuple[str, float], ...] = ()
 
     def json(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -76,14 +80,27 @@ class HistoryView:
             "time": self.time,
             "text": self.text,
             "confidence": round(self.confidence, 4),
+            "characters": [
+                {"char": character, "confidence": round(score, 4)}
+                for character, score in self.characters
+            ],
             "box": _box_json(self.box),
         }
         payload.update(_timing_json(self.timing))
         return payload
 
 
+@dataclass
+class _PlateSlot:
+    view: HistoryView
+    aliases: deque[str] = field(default_factory=lambda: deque(maxlen=MATCH_ALIASES))
+    best_by_text: dict[str, float] = field(default_factory=dict)
+    quality_by_text: dict[str, float] = field(default_factory=dict)
+    best_quality: float = 0.0
+
+
 class ResultStore:
-    """Thread-safe latest frame and a fixed-size plate history."""
+    """Thread-safe latest frame and sticky distinct-plate history."""
 
     def __init__(self, history_limit: int) -> None:
         if history_limit <= 0:
@@ -93,7 +110,7 @@ class ResultStore:
         self._frame_id = 0
         self._event_id = 0
         self._latest: LatestView | None = None
-        self._history: deque[HistoryView] = deque(maxlen=history_limit)
+        self._slots: list[_PlateSlot] = []
 
     @property
     def history_limit(self) -> int:
@@ -105,7 +122,7 @@ class ResultStore:
 
     def history(self) -> tuple[HistoryView, ...]:
         with self._lock:
-            return tuple(self._history)
+            return tuple(slot.view for slot in self._slots)
 
     def record(
         self,
@@ -205,30 +222,122 @@ class ResultStore:
                 plates=tuple(accepted),
                 timing=timing,
             )
-            for read, plate_jpeg, plate_width, plate_height in reversed(prepared):
-                self._event_id += 1
-                self._history.appendleft(
-                    HistoryView(
-                        id=self._event_id,
-                        stream=frame.stream_name,
-                        frame_id=frame_id,
-                        width=plate_width,
-                        height=plate_height,
-                        time=stamp,
-                        text=read.text,
-                        confidence=read.confidence,
-                        box=read.box,
-                        jpeg=plate_jpeg,
-                        timing=timing,
-                    )
+            for read, plate_jpeg, plate_width, plate_height in prepared:
+                self._upsert_slot(
+                    read,
+                    plate_jpeg,
+                    plate_width,
+                    plate_height,
+                    frame_id=frame_id,
+                    stream=frame.stream_name,
+                    stamp=stamp,
+                    timing=timing,
                 )
         logger.debug(
-            "published frame %s id=%s plates=%d new=%d",
+            "published frame %s id=%s plates=%d new=%d slots=%d",
             frame.stream_name,
             frame_id,
             len(accepted),
             len(fresh),
+            len(self._slots),
         )
+
+    def _upsert_slot(
+        self,
+        read: PlateRead,
+        plate_jpeg: bytes,
+        plate_width: int,
+        plate_height: int,
+        *,
+        frame_id: int,
+        stream: str,
+        stamp: str,
+        timing: FrameTiming | None,
+    ) -> None:
+        characters = tuple(zip(read.text, read.char_confidences, strict=False))
+        quality = float(getattr(read, "laplacian_var", 0.0) or 0.0)
+        index = self._match_slot(read.text)
+        if index is None:
+            self._event_id += 1
+            view = HistoryView(
+                id=self._event_id,
+                stream=stream,
+                frame_id=frame_id,
+                width=plate_width,
+                height=plate_height,
+                time=stamp,
+                text=read.text,
+                confidence=read.confidence,
+                box=read.box,
+                jpeg=plate_jpeg,
+                timing=timing,
+                characters=characters,
+            )
+            slot = _PlateSlot(view=view, best_quality=quality)
+            slot.aliases.append(read.text)
+            slot.best_by_text[read.text] = float(read.confidence)
+            slot.quality_by_text[read.text] = quality
+            self._slots.insert(0, slot)
+            del self._slots[self._limit :]
+            return
+
+        slot = self._slots.pop(index)
+        current = slot.view
+        slot.best_by_text[read.text] = max(
+            float(slot.best_by_text.get(read.text, 0.0)),
+            float(read.confidence),
+        )
+        slot.quality_by_text[read.text] = max(
+            float(slot.quality_by_text.get(read.text, 0.0)),
+            quality,
+        )
+        text, confidence = merge_text(
+            current.text,
+            current.confidence,
+            read.text,
+            read.confidence,
+            aliases=tuple(slot.aliases),
+            best_by_text=slot.best_by_text,
+            quality_by_text=slot.quality_by_text,
+            current_quality=slot.best_quality,
+            new_quality=quality,
+        )
+        text_changed = text != current.text
+        use_new_glyph = text == read.text
+        better_frame = use_new_glyph and (
+            float(read.confidence) > float(current.confidence) + 1e-6
+            or (
+                abs(float(read.confidence) - float(current.confidence)) <= 0.02
+                and quality > slot.best_quality + 1e-6
+            )
+            or text_changed
+        )
+        if better_frame:
+            slot.best_quality = max(slot.best_quality, quality)
+        slot.view = replace(
+            current,
+            stream=stream,
+            frame_id=frame_id,
+            time=stamp,
+            text=text,
+            confidence=confidence,
+            box=read.box if use_new_glyph else current.box,
+            timing=timing if better_frame or text_changed else current.timing,
+            characters=characters if use_new_glyph else current.characters,
+            jpeg=plate_jpeg if better_frame else current.jpeg,
+            width=plate_width if better_frame else current.width,
+            height=plate_height if better_frame else current.height,
+        )
+        slot.aliases.append(read.text)
+        self._slots.insert(0, slot)
+
+    def _match_slot(self, text: str) -> int | None:
+        for index, slot in enumerate(self._slots):
+            if same_identity(slot.view.text, text):
+                return index
+            if any(same_identity(alias, text) for alias in slot.aliases):
+                return index
+        return None
 
 
 def publish_reads(
@@ -272,10 +381,10 @@ def classify_reads(
 ) -> tuple[list[PlateRead], list[PlateRead]]:
     """Accepted plates for this frame.
 
-    Repeated texts are kept so history can show every ladder release (up to the
-    inference FPS). ``last_texts`` is retained for callers but no longer filters.
+    ``last_texts`` is retained for callers; sticky history dedupe lives in
+    ``ResultStore``.
     """
-    del last_texts  # no longer used to suppress repeats
+    del last_texts
     accepted: list[PlateRead] = []
     for read in reads:
         if accept_plate(
@@ -404,9 +513,11 @@ def _jpeg_bytes(image: object, quality: int, stream: str) -> bytes | None:
 def _timing_json(timing: FrameTiming | None) -> dict[str, object]:
     if timing is None:
         return {}
+    runtime = timing.runtime if timing.runtime in {"cpu", "npu"} else "cpu"
     return {
         "detector_ms": round(timing.detector_ms, 1),
         "reader_ms": round(timing.reader_ms, 1),
+        "runtime": runtime,
     }
 
 

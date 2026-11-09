@@ -270,33 +270,35 @@ def classify_reads(
     *,
     min_char_confidence: float | None = None,
 ) -> tuple[list[PlateRead], list[PlateRead]]:
-    """Accepted plates, and the subset whose text was not already showing.
+    """Accepted plates for this frame.
 
-    A frame with no accepted plate leaves the previous texts in place, so a
-    missed frame does not log the same plate again on the next hit.
+    Repeated texts are kept so history can show every ladder release (up to the
+    inference FPS). ``last_texts`` is retained for callers but no longer filters.
     """
-    accepted = [
-        read
-        for read in reads
+    del last_texts  # no longer used to suppress repeats
+    accepted: list[PlateRead] = []
+    for read in reads:
         if accept_plate(
             read.text,
             read.confidence,
             min_confidence,
             min_char_confidence=min_char_confidence,
             char_confidences=read.char_confidences,
-        )
-    ]
-    if not accepted:
-        return [], []
-    seen = set(last_texts.get(stream, set()))
-    fresh: list[PlateRead] = []
-    for read in accepted:
-        if read.text in seen:
+        ):
+            accepted.append(read)
             continue
-        seen.add(read.text)
-        fresh.append(read)
-    last_texts[stream] = {read.text for read in accepted}
-    return accepted, fresh
+        min_char = (
+            min(read.char_confidences) if read.char_confidences else read.confidence
+        )
+        logger.info(
+            "ocr reject %s text=%s min_char=%.2f floor=%.2f char_floor=%s",
+            stream,
+            read.text,
+            min_char,
+            min_confidence,
+            f"{min_char_confidence:.2f}" if min_char_confidence is not None else "none",
+        )
+    return accepted, list(accepted)
 
 
 def encode_jpeg(frame: Frame, quality: int) -> bytes | None:

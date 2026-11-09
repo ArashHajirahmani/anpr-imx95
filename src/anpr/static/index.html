@@ -35,11 +35,13 @@
   }
   main {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(12rem, 22rem);
+    grid-template-columns: minmax(12rem, 22rem) minmax(0, 1fr);
     gap: 1rem;
     padding: 1rem;
+    height: calc(100vh - 3.5rem);
+    box-sizing: border-box;
   }
-  .live { min-width: 0; }
+  .live { min-width: 0; overflow: auto; }
   .frame {
     position: relative;
     background: #0a0c0a;
@@ -80,7 +82,14 @@
   #meta dd { margin: 0; }
   #meta dt.timing,
   #meta dd.timing { color: #f4e04a; }
-  .history { display: flex; flex-direction: column; gap: 0.75rem; }
+  .history {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 0.25rem;
+  }
   .history article { background: #181c17; padding: 0.5rem; }
   .hist-plate {
     margin: 0.35rem 0 0;
@@ -103,6 +112,7 @@
 </header>
 <p id="error">waiting for anpr api</p>
 <main>
+  <section id="history" class="history"></section>
   <section class="live">
     <div id="live-frame" class="frame waiting">
       <img id="live-image" alt="">
@@ -111,7 +121,6 @@
     <p id="plate" class="empty">—</p>
     <dl id="meta"></dl>
   </section>
-  <section id="history" class="history"></section>
 </main>
 <footer id="debug"></footer>
 <script>
@@ -212,10 +221,28 @@ function renderLive(latest) {
   fillMeta(page.meta, rows);
 }
 
+function minCharConfidence(plate) {
+  const chars = plate && plate.characters;
+  if (Array.isArray(chars) && chars.length) {
+    let lowest = Number.POSITIVE_INFINITY;
+    for (const item of chars) {
+      const score = Number(item && item.confidence);
+      if (Number.isFinite(score) && score < lowest) {
+        lowest = score;
+      }
+    }
+    if (Number.isFinite(lowest)) {
+      return lowest.toFixed(2);
+    }
+  }
+  const fallback = Number(plate && plate.confidence);
+  return Number.isFinite(fallback) ? fallback.toFixed(2) : "";
+}
+
 function plateRows(plate) {
   const box = plate.box || {};
   return [
-    { label: "Character confidence", value: Number(plate.confidence).toFixed(2) },
+    { label: "Character confidence", value: minCharConfidence(plate) },
     { label: "Detector confidence", value: Number(box.confidence).toFixed(2) },
     { label: "Position", value: box.x + ", " + box.y },
     { label: "Size", value: box.width + " × " + box.height + " px" },
@@ -300,12 +327,15 @@ function drawBoxes(layer, plates, width, height) {
 }
 
 function renderHistory(items, limit) {
-  const rows = [];
-  for (let index = 0; index < limit; index += 1) {
-    rows.push(items && items[index] ? items[index] : null);
-  }
-  const token = rows.map((item) => item ? item.id + ":" + item.text : "-").join(",");
-  if (token === historyToken && page.history.childElementCount === limit) {
+  const rows = (items || []).slice(0, limit);
+  const token = rows.map((item) => item.id + ":" + item.text + ":" + item.confidence).join(",");
+  if (token === historyToken && page.history.childElementCount === rows.length) {
+    for (let index = 0; index < rows.length; index += 1) {
+      const image = page.history.children[index].querySelector("img");
+      if (image && rows[index].image) {
+        image.src = rows[index].image;
+      }
+    }
     return;
   }
   historyToken = token;
@@ -335,7 +365,7 @@ function historyCard(item) {
     title.textContent = item.text || "—";
     const box = item.box || {};
     const parts = [
-      "Character confidence " + Number(item.confidence).toFixed(2),
+      "Character confidence " + minCharConfidence(item),
       "Detector confidence " + Number(box.confidence).toFixed(2),
     ];
     const detector = milliseconds(item.detector_ms);

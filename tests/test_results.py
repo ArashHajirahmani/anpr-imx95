@@ -7,7 +7,7 @@ from anpr.types import Frame, PlateBox
 JPEG = b"\xff\xd8\xff\xd9"
 
 
-def test_record_keeps_four_newest_plates() -> None:
+def test_record_keeps_newest_plates() -> None:
     store = ResultStore(4)
     seen: dict[str, set[str]] = {}
     for index, text in enumerate(["A", "B", "C", "D", "E"]):
@@ -28,7 +28,7 @@ def test_record_keeps_four_newest_plates() -> None:
     assert latest.plates[0].text == "E"
 
 
-def test_repeat_and_miss_do_not_grow_history() -> None:
+def test_repeats_are_kept_in_history() -> None:
     store = ResultStore(4)
     seen: dict[str, set[str]] = {}
     store.record(
@@ -45,6 +45,8 @@ def test_repeat_and_miss_do_not_grow_history() -> None:
         jpeg=JPEG + b"\x01",
         last_texts=seen,
     )
+    assert [item.text for item in repeated] == ["ABC123"]
+    assert len(store.history()) == 2
     missed = store.record(
         _frame(3),
         [_plate("ABC123", confidence=0.01)],
@@ -52,25 +54,10 @@ def test_repeat_and_miss_do_not_grow_history() -> None:
         jpeg=JPEG + b"\x02",
         last_texts=seen,
     )
-    assert repeated == []
     assert missed == []
-    assert len(store.history()) == 1
     latest = store.latest()
     assert latest is not None
     assert latest.plates == ()
-    again = store.record(
-        _frame(4),
-        [_plate("ABC123")],
-        min_confidence=0.07,
-        jpeg=JPEG + b"\x03",
-        last_texts=seen,
-    )
-    assert again == []
-    assert len(store.history()) == 1
-    restored = store.latest()
-    assert restored is not None
-    assert restored.plates[0].text == "ABC123"
-    assert restored.plates[0].box.x == 4
 
 
 def test_weak_character_is_not_published() -> None:
@@ -224,6 +211,21 @@ def test_encode_jpeg_round_trip() -> None:
     assert payload.startswith(b"\xff\xd8")
     decoded = cv2.imdecode(numpy.frombuffer(payload, dtype=numpy.uint8), cv2.IMREAD_COLOR)
     assert decoded.shape == (4, 6, 3)
+
+
+def test_history_limit_fifty() -> None:
+    store = ResultStore(50)
+    seen: dict[str, set[str]] = {}
+    for index in range(55):
+        store.record(
+            _frame(index),
+            [_plate(f"P{index}")],
+            min_confidence=0.07,
+            jpeg=JPEG + bytes([index % 255]),
+            last_texts=seen,
+        )
+    assert len(store.history()) == 50
+    assert store.history()[0].text == "P54"
 
 
 def _frame(stamp: int = 1) -> Frame:

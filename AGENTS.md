@@ -6,7 +6,7 @@ This repo is the ANPR application for the FRDM i.MX95. Read it before editing.
 
 - Change application code, config samples, deploy templates, and host export tooling here.
 - Leave `imx-docker` and `yocto-builds` alone during application tasks. The BSP is a separate `repo` checkout. See [docs/upstreams.md](docs/upstreams.md).
-- Do not commit `*.pt`, `*.tflite`, or files under `datasets/calibration/images/`.
+- Do not commit `*.pt`, `*.tflite`, `*.onnx`, or files under `datasets/calibration/images/` or `models/` (except `models/README.md`).
 
 ## Runtime facts
 

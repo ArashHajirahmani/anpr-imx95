@@ -9,6 +9,9 @@ build/
 *.pt
 *.tflite
 *.onnx
+# Local weight cache; only models/README.md is tracked (see that file).
+/models/*
+!/models/README.md
 datasets/calibration/images/
 datasets/videos/*.mp4
 datasets/videos/*.MOV

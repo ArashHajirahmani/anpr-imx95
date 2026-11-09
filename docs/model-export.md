@@ -1,5 +1,24 @@
 # Model export
 
+Float ONNX detector and OCR weights are downloaded into `models/` (gitignored).
+INT8 ONNX for Neutron is produced on the host with calibration frames. See
+[models/README.md](../models/README.md) and `tools/host/fetch_models.sh`.
+
+## ONNX INT8 (board `service.runtime=npu`)
+
+```bash
+tools/host/fetch_models.sh
+.venv/bin/python tools/host/quantize_onnx_int8.py \
+  --detector models/plate_detector.onnx \
+  --ocr models/cct_s_v2_global.onnx \
+  --images datasets/calibration/images \
+  --output-dir models
+```
+
+Copy `*.onnx` to `/opt/anpr/models` on the board.
+
+## TFLite / neutron-converter (legacy path)
+
 Neutron compilation on the host needs a fully quantized INT8 TFLite model. `yolo export format=tflite int8=True` without a representative image set can leave layers unquantized. Those layers stay on the CPU through XNNPACK, and `/dev/neutron0` does not run the heavy ops.
 
 ## Calibration set

@@ -26,4 +26,6 @@ NXP git projects fetched by `repo` into `yocto-builds/sources`:
 
 The eIQ Toolkit installer supplies host-side `neutron-converter`. It is not a git remote and it is not on the board rootfs. The board package `neutron` ships `/usr/lib/libNeutronDriver.so`.
 
-Weights (`*.pt`, `*.tflite`) and calibration frames stay untracked. A Yocto layer inside this repo waits until the `/opt/anpr` install is proven.
+Weights (`*.pt`, `*.tflite`, `*.onnx`) and calibration frames stay untracked.
+`models/README.md` documents download and INT8 regeneration. A Yocto layer inside
+this repo waits until the `/opt/anpr` install is proven.

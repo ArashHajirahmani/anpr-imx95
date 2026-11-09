@@ -15,7 +15,10 @@ deploy/                       systemd units and udev rule
 datasets/calibration/         INT8 calibration frames (images are gitignored)
 datasets/videos/              H.264 bench MP4s for RTSP (files are gitignored)
 tools/host/export_int8.py     host-side INT8 export preflight
+tools/host/fetch_models.sh    download float detector + OCR into models/
+tools/host/quantize_onnx_int8.py  INT8 ONNX for Neutron
 tools/host/run-rtsp-server.sh publish MP4 files for the board
+models/                       local weights (gitignored); see models/README.md
 docs/                         architecture, upstreams, model export
 ```
 

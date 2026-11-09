@@ -186,7 +186,12 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     args.output_dir.mkdir(parents=True, exist_ok=True)
     detector_out = args.output_dir / "plate_detector.int8.onnx"
-    ocr_out = args.output_dir / "cct_xs_v2_global.int8.onnx"
+    ocr_stem = args.ocr.name
+    if ocr_stem.endswith(".onnx"):
+        ocr_stem = ocr_stem[: -len(".onnx")]
+    if ocr_stem.endswith(".int8"):
+        ocr_stem = ocr_stem[: -len(".int8")]
+    ocr_out = args.output_dir / f"{ocr_stem}.int8.onnx"
     detector_session = ort.InferenceSession(str(args.detector), providers=["CPUExecutionProvider"])
     detector_input = detector_session.get_inputs()[0].name
     _quantize(

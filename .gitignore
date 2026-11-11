@@ -26,3 +26,7 @@ tools/host/auto.key
 # MediaMTX may also drop certs in the cwd when started from the repo root
 /auto.crt
 /auto.key
+
+# Claude Code local overrides
+.claude/settings.local.json
+CLAUDE.local.md

@@ -143,10 +143,16 @@ class ResultStore:
         self._reset_listeners.append(listener)
 
     def reset(self) -> None:
-        """Forget the plate history and let listeners drop their memory. Frames keep flowing."""
+        """Forget everything shown to the page and let listeners drop their memory.
+
+        Frames keep flowing; counters restart from zero with the next one.
+        """
         with self._lock:
             self._slots.clear()
-            self._frame_id += 1
+            self._latest = None
+            self._frame_id = 0
+            self._event_id = 0
+            self._frame_times.clear()
         for listener in list(self._reset_listeners):
             listener()
 

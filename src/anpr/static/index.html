@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>ANPR</title>
+<title>Automatic Number Plate Recognition on iMX95</title>
 <style>
   html, body {
     height: 100%;
@@ -24,6 +24,8 @@
     display: flex;
     justify-content: space-between;
     align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.2rem 1rem;
     padding: 0.3rem 0.55rem 0.15rem;
     flex: 0 0 auto;
   }
@@ -47,6 +49,8 @@
   }
   #reset:hover { border-color: #39ff14; color: #39ff14; }
   #reset:disabled { opacity: 0.5; cursor: default; }
+  #repo { color: #7d8b7a; font-size: 0.7rem; text-decoration: none; }
+  #repo:hover { color: #39ff14; text-decoration: underline; }
   #status { margin: 0; font-size: 0.75rem; }
   #status.ok { color: #39ff14; }
   #status.wait { color: #d7e0d4; }
@@ -190,8 +194,9 @@
 </head>
 <body>
 <header>
-  <h1>ANPR</h1>
+  <h1>Automatic Number Plate Recognition on iMX95</h1>
   <div class="status-box">
+    <a id="repo" href="https://github.com/ArashHajirahmani/anpr-imx95" target="_blank" rel="noopener noreferrer">github.com/ArashHajirahmani/anpr-imx95</a>
     <p id="status" class="wait">connecting</p>
     <button id="reset" type="button" title="Reset plate memory" aria-label="Reset plate memory">&#8635;</button>
   </div>
@@ -233,15 +238,39 @@ let historyToken = "";
 document.getElementById("reset").addEventListener("click", (event) => {
   const button = event.currentTarget;
   button.disabled = true;
+  resetting = true;
+  resetPage();
   fetch("/api/reset", { method: "POST" })
     .catch(() => {})
     .finally(() => {
+      resetting = false;
       button.disabled = false;
     });
 });
 
 let lastLive = null;
 let pipelineInfo = null;
+let resetting = false;
+
+// Empty everything the page remembers; the next poll repopulates it from the backend.
+function resetPage() {
+  lastLive = null;
+  lastHistory = [];
+  liveToken = "";
+  historyToken = "";
+  heldStats = null;
+  heldStatsUntil = 0;
+  lastMonoNs = null;
+  measuredFps = null;
+  page.liveFrame.classList.add("waiting");
+  page.liveImage.removeAttribute("src");
+  page.liveBoxes.replaceChildren();
+  page.liveMeta.classList.add("hidden");
+  page.liveMeta.textContent = "";
+  page.history.replaceChildren();
+  renderHistory([], HISTORY_SLOTS);
+  page.footLink.textContent = "reset · waiting for the next frame";
+}
 let lastHistory = [];
 let heldStats = null;
 let heldStatsUntil = 0;
@@ -262,7 +291,9 @@ function tick() {
       return response.json();
     })
     .then((state) => {
-      render(state);
+      if (!resetting) {
+        render(state);
+      }
       setTimeout(tick, POLL_MS);
     })
     .catch((error) => {

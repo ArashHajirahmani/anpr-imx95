@@ -208,3 +208,46 @@ def test_state_carries_backend_system_facts_and_page_shows_no_history_timing(
     finally:
         web.close()
         api.close()
+
+
+def test_reset_empties_frame_history_and_counters_and_page_has_title_and_link(
+    tmp_path: Path,
+) -> None:
+    socket_path = tmp_path / "api.sock"
+    store = ResultStore(4)
+    api = ApiService(store, socket_path)
+    api.start()
+    web = WebService(socket_path, "127.0.0.1", 0, 0.05)
+    _host, port = web.start()
+    try:
+        api.wait_until_ready(2)
+        page = _get(port, "/")
+        assert b"Automatic Number Plate Recognition on iMX95" in page
+        assert b"https://github.com/ArashHajirahmani/anpr-imx95" in page
+        assert b"function resetPage" in page
+        store.record(
+            Frame("videoCapture", b"raw", 5, 100, 50),
+            [PlateRead("ABC123", 0.91, PlateBox(4, 6, 30, 12, 0.8))],
+            min_confidence=0.07,
+            jpeg=b"\xff\xd8jpeg",
+            last_texts={},
+        )
+        _wait(lambda: json.loads(_get(port, "/api/state"))["latest"] is not None)
+        request = urllib.request.Request(f"http://127.0.0.1:{port}/api/reset", method="POST")
+        urllib.request.urlopen(request, timeout=3).read()
+        assert store.latest() is None
+        state = json.loads(_get(port, "/api/state"))
+        assert state["history"] == []
+        assert state["failures"] == 0
+        # Counters restart: the next frame is frame 1 again.
+        store.record(
+            Frame("videoCapture", b"raw", 6, 100, 50),
+            [],
+            min_confidence=0.07,
+            jpeg=b"\xff\xd8jpeg",
+            last_texts={},
+        )
+        assert store.latest().frame_id == 1
+    finally:
+        web.close()
+        api.close()

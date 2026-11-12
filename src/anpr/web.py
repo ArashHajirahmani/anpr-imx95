@@ -260,12 +260,15 @@ class ClientCache:
         with self._lock:
             self._system = payload
 
-    def clear_history(self) -> None:
-        """Drop the cached history so the page empties before the next poll."""
+    def clear(self) -> None:
+        """Drop the cached frame, history, and counters so the page empties at once."""
         with self._lock:
+            self._latest = None
+            self._latest_jpeg = b""
             self._history = []
             self._history_jpeg = {}
             self._history_keys = {}
+            self.failures = 0
 
     def latest_jpeg(self) -> bytes:
         with self._lock:
@@ -344,7 +347,7 @@ class WebHandler(BaseHTTPRequestHandler):
             cache = self.server.cache
             status, _ = unix_request(cache.api_socket, "/v1/reset", 3.0, method="POST")
             if status == 200:
-                cache.clear_history()
+                cache.clear()
             self._send(200 if status == 200 else 502, _JSON, _dump({"ok": status == 200}))
         except OSError:
             self._send(502, _JSON, _dump({"ok": False, "error": "api unreachable"}))

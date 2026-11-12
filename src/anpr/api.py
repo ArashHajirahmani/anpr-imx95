@@ -59,9 +59,9 @@ class ApiService:
                 logger.error("api bind failed for %s: %s", self.socket_path, exc)
                 self._stop.wait(_RETRY_SECONDS)
                 continue
-            self._ready.set()
             logger.info("api listening on unix socket %s", self.socket_path)
             logger.info("curl --unix-socket %s http://localhost/v1/latest", self.socket_path)
+            self._ready.set()
             heartbeat = time.monotonic()
             try:
                 server.timeout = 0.2

@@ -10,9 +10,9 @@ from pathlib import Path
 from anpr.capture import pipeline_for_stream
 from anpr.config import AppConfig
 from anpr.plates import ocr_floor
-from anpr.results import FrameTiming, ResultStore, publish_reads
+from anpr.publisher import ReadPublisher
+from anpr.results import ResultStore
 from anpr.types import Frame
-from anpr.vote import PlateVoteTracker
 
 logger = logging.getLogger("anpr.pipeline")
 _OPEN_RETRY_SECONDS = 0.5
@@ -80,23 +80,43 @@ def run_streams(
     ]
     plate_reader = reader if reader is not None else _load_reader(config)
     if plate_reader is not None:
-        threads.append(
-            threading.Thread(
-                target=_infer_loop,
-                name="plate-reader",
-                args=(
+        publisher = ReadPublisher(
+            results,
+            ocr_floor(config.recognizer.min_confidence, config.service.runtime),
+            ocr_floor(config.recognizer.min_char_confidence, config.service.runtime),
+            config.service.jpeg_quality,
+        )
+        if hasattr(plate_reader, "detect") and hasattr(plate_reader, "recognize"):
+            from anpr.staged import StagedRecognizer
+
+            logger.info(
+                "staged recognition: 1 detector thread, %d OCR workers", config.service.ocr_workers
+            )
+            threads.extend(
+                StagedRecognizer(
                     wired.slots,
                     stop,
                     plate_reader,
                     config.service.inference_fps_limit,
-                    ocr_floor(config.recognizer.min_confidence, config.service.runtime),
-                    ocr_floor(config.recognizer.min_char_confidence, config.service.runtime),
-                    results,
-                    config.service.jpeg_quality,
-                ),
-                daemon=True,
+                    config.service.ocr_workers,
+                    publisher,
+                ).threads()
             )
-        )
+        else:
+            threads.append(
+                threading.Thread(
+                    target=_infer_loop,
+                    name="plate-reader",
+                    args=(
+                        wired.slots,
+                        stop,
+                        plate_reader,
+                        config.service.inference_fps_limit,
+                        publisher,
+                    ),
+                    daemon=True,
+                )
+            )
     for thread in threads:
         thread.start()
     try:
@@ -182,6 +202,7 @@ def _load_reader(config: AppConfig) -> object | None:
     try:
         from anpr.recognize import PlateReader
 
+        delegate = config.detector.delegate_path.strip()
         return PlateReader(
             detector_path=Path(detector_path),
             ocr_path=Path(ocr_path),
@@ -191,23 +212,12 @@ def _load_reader(config: AppConfig) -> object | None:
             quality=config.recognizer.quality,
             enhancer=config.recognizer.enhancer,
             roi_refine=config.recognizer.roi_refine,
+            delegate_path=Path(delegate) if delegate else None,
+            ocr_threads=1 if config.service.ocr_workers > 1 else 2,
         )
     except Exception:
         logger.exception("plate reader failed to load")
         return None
-
-
-def _frame_timing(stats: object) -> FrameTiming | None:
-    detector_ms = getattr(stats, "det_ms", None)
-    reader_ms = getattr(stats, "ocr_ms", None)
-    if isinstance(detector_ms, bool) or isinstance(reader_ms, bool):
-        return None
-    if not isinstance(detector_ms, int | float) or not isinstance(reader_ms, int | float):
-        return None
-    runtime = getattr(stats, "runtime", "cpu")
-    if not isinstance(runtime, str) or runtime not in {"cpu", "npu"}:
-        runtime = "cpu"
-    return FrameTiming(float(detector_ms), float(reader_ms), runtime)
 
 
 def _reader_outcome(name: str, outcome: object) -> tuple[list[object] | None, object]:
@@ -222,17 +232,11 @@ def _infer_loop(
     stop: threading.Event,
     reader: object,
     fps_limit: int,
-    min_confidence: float,
-    min_char_confidence: float,
-    results: ResultStore | None,
-    jpeg_quality: int,
+    publisher: ReadPublisher,
 ) -> None:
+    """Single-threaded path: detect, OCR, and publish on this thread."""
     interval = 1.0 / fps_limit
     next_tick = 0.0
-    last_texts: dict[str, set[str]] = {}
-    voter = PlateVoteTracker()
-    # Admit weak OCR into the vote buffer; high-trust / majority decide release.
-    admit_floor = min(0.05, float(min_confidence), float(min_char_confidence))
     while not stop.is_set():
         now = time.monotonic()
         if now < next_tick:
@@ -252,78 +256,4 @@ def _infer_loop(
             reads, stats = _reader_outcome(name, outcome)
             if reads is None or stats is None:
                 continue
-            released: list[object] = []
-            for read in reads:
-                min_char = (
-                    min(read.char_confidences)
-                    if getattr(read, "char_confidences", None)
-                    else read.confidence
-                )
-                if float(min_char) < admit_floor:
-                    logger.info(
-                        "ocr reject %s text=%s min_char=%.2f admit_floor=%.2f",
-                        name,
-                        read.text,
-                        float(min_char),
-                        admit_floor,
-                    )
-                    continue
-                logger.info(
-                    "ocr candidate %s text=%s confidence=%.2f blank=%.2f box=%d,%d %dx%d",
-                    name,
-                    read.text,
-                    float(read.confidence),
-                    float(getattr(read, "blank_uncertainty", 0.0)),
-                    read.box.x,
-                    read.box.y,
-                    read.box.width,
-                    read.box.height,
-                )
-                try:
-                    voted = voter.consider(name, read)
-                except Exception:
-                    logger.exception("plate vote failed for %s", name)
-                    voted = read if float(min_char) >= float(min_char_confidence) else None
-                if voted is None:
-                    continue
-                voted_min = (
-                    min(voted.char_confidences)
-                    if getattr(voted, "char_confidences", None)
-                    else voted.confidence
-                )
-                if float(voted_min) < float(min_char_confidence):
-                    continue
-                released.append(voted)
-            try:
-                fresh = publish_reads(
-                    results,
-                    frame,
-                    released,
-                    min_confidence=min_confidence,
-                    min_char_confidence=min_char_confidence,
-                    jpeg_quality=jpeg_quality,
-                    last_texts=last_texts,
-                    timing=_frame_timing(stats),
-                )
-            except Exception:
-                logger.exception("plate publish failed for %s", name)
-                continue
-            for read in fresh:
-                box = read.box
-                logger.info(
-                    "plate %s text=%s confidence=%.2f runtime=%s det_ms=%.1f ocr_ms=%.1f "
-                    "cpu=%.0f rss_mb=%.0f box=%d,%d %dx%d det=%.2f",
-                    name,
-                    read.text,
-                    read.confidence,
-                    stats.runtime,
-                    stats.det_ms,
-                    stats.ocr_ms,
-                    stats.cpu_percent,
-                    stats.rss_mb,
-                    box.x,
-                    box.y,
-                    box.width,
-                    box.height,
-                    box.confidence,
-                )
+            publisher.handle(name, frame, reads, stats)

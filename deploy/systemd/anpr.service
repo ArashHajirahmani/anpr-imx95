@@ -8,6 +8,8 @@ User=anpr
 Group=video
 WorkingDirectory=/opt/anpr
 Environment=PYTHONPATH=/opt/anpr/src
+# Neutron ORT EP defaults to 4×512MiB CMA; FRDM CMA is ~960MiB.
+Environment=NEUTRON_CMA_512SLOTS=1
 # Environment=ANPR_LOG_LEVEL=DEBUG
 RuntimeDirectory=anpr
 RuntimeDirectoryMode=0755

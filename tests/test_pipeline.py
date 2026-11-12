@@ -136,3 +136,46 @@ def test_publisher_script_names_the_video_capture_path() -> None:
     script = (ROOT / "tools/host/run-rtsp-server.sh").read_text(encoding="utf-8")
     assert "videoCapture" in script
     assert "youtube" not in script.lower()
+
+
+def test_staged_pipeline_publishes_the_same_snapshot() -> None:
+    pytest.importorskip("cv2")
+    from anpr.recognize import DetectedFrame, OcrOutcome
+
+    store = ResultStore(4)
+    stop = threading.Event()
+
+    class _StagedReader:
+        def detect(self, frame: Frame) -> DetectedFrame:
+            return DetectedFrame(frame, None, ((1, 1, 3, 3, 0.5),), "cpu", 1.0, 0.0)
+
+        def recognize(self, detected: DetectedFrame) -> OcrOutcome:
+            plate = PlateRead("ABC123", 0.91, PlateBox(1, 1, 2, 2, 0.5))
+            return OcrOutcome([plate], 2.0, 0.0)
+
+    class _Capture:
+        def pull(self, timeout_ns: int = 0) -> tuple[bytes, int, int, int] | None:
+            if store.history():
+                stop.set()
+                return None
+            time.sleep(0.01)
+            return bytes(4 * 4 * 3), 10, 4, 4
+
+        def close(self) -> None:
+            pass
+
+    run_streams(
+        load_config(EXAMPLE),
+        stop,
+        lambda _description: _Capture(),
+        results=store,
+        reader=_StagedReader(),
+    )
+    latest = store.latest()
+    assert latest is not None
+    assert latest.plates[0].text == "ABC123"
+    assert latest.plates[0].box.x == 1
+    assert latest.jpeg.startswith(b"\xff\xd8")
+    assert latest.json()["detector_ms"] == 1.0
+    assert latest.json()["reader_ms"] == 2.0
+    assert [item.text for item in store.history()] == ["ABC123"]

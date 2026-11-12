@@ -47,13 +47,15 @@ Run all four before calling a Python change done (the `anpr-verify` skill does t
 
 ## Current state (update when it changes)
 
-- Branch `wip/ocr-vote-roi` carries uncommitted work: ROI/vote tuning in `recognize.py`/`pipeline.py`, `tools/host/convert_neutron_tflite.py` (untracked), doc/config updates.
-- Known: `tools/host/convert_neutron_tflite.py:109` fails ruff E501; `tests/test_api.py::test_api_serves_metadata_and_jpeg` is flaky (fails ~1 in 3 full runs, passes alone/rerun). Fix both before the WIP is committed.
-- Ahead: Neutron inference on a converted model, then board install under `/opt/anpr` (see ROADMAP.md).
+- Branch `wip/ocr-vote-roi` carries uncommitted work: ROI/vote tuning, the Neutron TFLite detector path (`convert_neutron_tflite.py`, `onnx_split_head.py`, split box/score outputs), and the staged pipeline (`staged.py`, `publisher.py`, `service.ocr_workers`).
+- Detector on the NPU: the head must be split into `boxes` and `scores` outputs (one `[1,5,N]` tensor quantizes every score to 0). Always compare NPU vs float detections on the calibration frames before deploying. See `docs/model-export.md`.
+- OCR stays on CPU (static INT8 of the CCT model diverges from float; weights-only quantization tracks it far better). The NPU cannot run it.
+- Staged pipeline: 1 detector thread (owns the interpreter) + `service.ocr_workers` (default 4) OCR workers + in-order publisher. The detector is compiled to end at raw DFL logits + scores and decoded in numpy (`decode_dfl_head`), so `det_ms` is about 43 ms. Board throughput with 4 workers: about 16 fps while frames flow (single-threaded was about 3.4); 3 workers gave about 9.4, 5 saturate the CPU. `/v1/latest` carries a backend-measured `fps` (3 s window) that the UI shows; the old UI estimate measured the 500 ms poll interval (about 2).
+- Ahead: OCR throughput (a faster OCR model, or OCR on fewer pixels), then ROADMAP.md Phase 5 closure and a commit of the WIP.
 
 ## Tooling
 
-- Host tool install location: `/opt` on this machine is full. Install large host tools (eIQ Toolkit / `neutron-converter`, MediaMTX, toolchains, `gh` if bulky) under `/run/media/arash/Projects/iMX95/host-tools/`, never `/opt`. The Yocto SDK is at `/run/media/arash/Projects/iMX95/host-tools/fsl-imx-wayland/6.18-wrynose` (source its `environment-setup-armv8-2a-poky-linux` for cross builds; root-owned). Small packages may use default system paths. Keep all of this outside the repo.
+- Host tool install location: `/opt` was full; the SDK is symlinked into `/opt`, but install other large host tools (eIQ Toolkit / `neutron-converter`, MediaMTX, toolchains, `gh` if bulky) under `/run/media/arash/Projects/iMX95/host-tools/`, never `/opt`. The Yocto SDK is at `/run/media/arash/Projects/iMX95/host-tools/fsl-imx-wayland/6.18-wrynose` (source its `environment-setup-armv8-2a-poky-linux` for cross builds; root-owned). Small packages may use default system paths. Keep all of this outside the repo.
 
 - GitHub: `gh` CLI is not installed on this machine. Project `.mcp.json` registers the GitHub MCP server; it needs `GITHUB_PERSONAL_ACCESS_TOKEN` in the environment.
 - Board and bench addresses, accounts, and remote names are kept out of git: see `CLAUDE.local.md` (gitignored). Outward actions (pushing, opening PRs, publishing RTSP, changing the board) need the user's go-ahead; read-only ssh checks on the board are fine.

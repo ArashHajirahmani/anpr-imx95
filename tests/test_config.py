@@ -38,7 +38,8 @@ def test_example_config_loads() -> None:
     assert config.web.listen_host == "0.0.0.0"
     assert config.web.listen_port == 8080
     assert config.web.poll_seconds == 0.5
-    assert config.detector.npu_path.endswith("plate_detector.int8.onnx")
+    assert config.detector.npu_path.endswith("plate_detector.neutron.tflite")
+    assert config.detector.delegate_path.endswith("libneutron_delegate.so")
     assert config.recognizer.npu_path.endswith("cct_s_v2_global.int8.onnx")
 
 
@@ -94,3 +95,18 @@ def _write(tmp_path: Path, *, conf_threshold: float = 0.5, stream_type: str = "r
     path = tmp_path / "config.json"
     path.write_text(text, encoding="utf-8")
     return path
+
+
+def test_ocr_workers_defaults_and_validates(tmp_path: Path) -> None:
+    import json
+
+    body = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    assert load_config(EXAMPLE).service.ocr_workers == 4
+    del body["service"]["ocr_workers"]
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(body), encoding="utf-8")
+    assert load_config(path).service.ocr_workers == 4
+    body["service"]["ocr_workers"] = 0
+    path.write_text(json.dumps(body), encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path)

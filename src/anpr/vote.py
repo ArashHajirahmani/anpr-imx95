@@ -259,9 +259,8 @@ def _majority_release(
         if count < need:
             continue
         better_len = len(text) > len(best_text)
-        better_conf = (
-            len(text) == len(best_text)
-            and read.confidence > (best_read.confidence if best_read else -1.0)
+        better_conf = len(text) == len(best_text) and read.confidence > (
+            best_read.confidence if best_read else -1.0
         )
         if score > best_score or (score == best_score and (better_len or better_conf)):
             best_text = text

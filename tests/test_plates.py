@@ -22,9 +22,7 @@ def test_decode_strips_padding() -> None:
     steps[0][digit] = 5
     steps[1][pad] = 5
     steps[2][pad] = 4
-    text, confidence, char_confidences, margins, blank_uncertainty = decode_characters(
-        steps
-    )
+    text, confidence, char_confidences, margins, blank_uncertainty = decode_characters(steps)
     assert text == "A"
     assert confidence > 0.5
     assert len(char_confidences) == 1
@@ -129,3 +127,71 @@ def test_resize_rgb_for_ocr_shape_and_downscale_kernel() -> None:
     assert out.shape == (OCR_HEIGHT, OCR_WIDTH, 3)
     small = np.zeros((32, 64, 3), dtype=np.uint8)
     assert resize_rgb_for_ocr(small).shape == (OCR_HEIGHT, OCR_WIDTH, 3)
+
+
+def test_join_detector_outputs_merges_split_head() -> None:
+    import numpy as np
+
+    from anpr.recognize import join_detector_outputs
+
+    boxes = np.arange(8, dtype=np.float32).reshape(1, 4, 2)
+    scores = np.array([[[0.9, 0.1]]], dtype=np.float32)
+    joined = join_detector_outputs([scores, boxes])
+    assert joined.shape == (1, 5, 2)
+    assert np.array_equal(joined[:, :4], boxes)
+    assert np.array_equal(joined[:, 4:], scores)
+    single = np.zeros((1, 5, 2), dtype=np.float32)
+    assert join_detector_outputs([single]) is single
+
+
+def test_uint8_letterbox_matches_quantized_float_path() -> None:
+    import numpy as np
+
+    pytest.importorskip("cv2")
+    from anpr.recognize import _letterbox, _letterbox_u8
+
+    rng = np.random.default_rng(7)
+    image = rng.integers(0, 256, size=(90, 160, 3), dtype=np.uint8)
+    blob, scale, left, top = _letterbox(image, 64)
+    fast, fast_scale, fast_left, fast_top = _letterbox_u8(image, 64)
+    assert (scale, left, top) == (fast_scale, fast_left, fast_top)
+    quantized = np.clip(np.round(blob / (1 / 255)) + -128, -128, 127).astype(np.int8)
+    assert fast.dtype == np.uint8
+    assert np.array_equal(np.bitwise_xor(fast, 128).view(np.int8), quantized)
+
+
+def test_decode_dfl_head_matches_a_hand_computed_box() -> None:
+    from anpr.recognize import DFL_BINS, decode_dfl_head
+
+    size, strides = 32, (8, 16)  # 4x4 + 2x2 anchors = 20
+    count = 4 * 4 + 2 * 2
+    logits = np.zeros((1, 64, count), dtype=np.float32)
+    scores = np.zeros((1, 1, count), dtype=np.float32)
+    # Anchor 5 is on the stride-8 grid at cell (x=1, y=1) -> center (1.5, 1.5) in stride units.
+    # Peak the bins so the distances are l=1, t=2, r=3, b=4.
+    for side, peak in enumerate((1, 2, 3, 4)):
+        logits[0, side * DFL_BINS + peak, 5] = 50.0
+    scores[0, 0, 5] = 0.9
+    scores[0, 0, 6] = 0.1  # below threshold: must stay zero
+    out = decode_dfl_head(logits, scores, 0.5, size=size, strides=strides)
+    assert out.shape == (1, 5, count)
+    # x1y1 = (1.5-1, 1.5-2) = (0.5, -0.5); x2y2 = (1.5+3, 1.5+4) = (4.5, 5.5); stride 8.
+    assert np.allclose(out[0, :, 5], [2.5 * 8, 2.5 * 8, 4.0 * 8, 6.0 * 8, 0.9], atol=1e-3)
+    assert not out[0, :, 6].any()
+    assert np.count_nonzero(out[0, 4]) == 1
+
+
+def test_decode_dfl_head_with_no_candidates_is_all_zero() -> None:
+    from anpr.recognize import decode_dfl_head
+
+    logits = np.zeros((1, 64, 20), dtype=np.float32)
+    scores = np.zeros((1, 1, 20), dtype=np.float32)
+    assert not decode_dfl_head(logits, scores, 0.5, size=32, strides=(8, 16)).any()
+
+
+def test_join_detector_outputs_decodes_dfl_pair() -> None:
+    from anpr.recognize import join_detector_outputs
+
+    logits = np.zeros((1, 64, 8400), dtype=np.float32)
+    scores = np.zeros((1, 1, 8400), dtype=np.float32)
+    assert join_detector_outputs([scores, logits], 0.25).shape == (1, 5, 8400)

@@ -55,6 +55,7 @@ class ServiceConfig:
     api_socket: str
     jpeg_quality: int
     history_limit: int
+    ocr_workers: int = 4
 
 
 @dataclass(frozen=True)
@@ -310,6 +311,7 @@ def _service(payload: dict[str, object]) -> ServiceConfig:
         api_socket=_socket_path(body.get("api_socket"), "service.api_socket"),
         jpeg_quality=_bounded_int(body.get("jpeg_quality"), "service.jpeg_quality", 1, 100),
         history_limit=_positive_int(body.get("history_limit"), "service.history_limit"),
+        ocr_workers=_bounded_int(body.get("ocr_workers", 4), "service.ocr_workers", 1, 8),
     )
 
 

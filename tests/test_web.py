@@ -145,3 +145,35 @@ def test_poll_is_one_request_when_nothing_changed(tmp_path: Path, monkeypatch: o
         assert not any(path.startswith("/v1/history/") for path in paths)
     finally:
         api.close()
+
+
+def test_reset_button_posts_through_to_the_store(tmp_path: Path) -> None:
+    socket_path = tmp_path / "api.sock"
+    store = ResultStore(4)
+    api = ApiService(store, socket_path)
+    api.start()
+    web = WebService(socket_path, "127.0.0.1", 0, 0.05)
+    _host, port = web.start()
+    try:
+        api.wait_until_ready(2)
+        assert b'id="reset"' in _get(port, "/")
+        store.record(
+            Frame("videoCapture", b"raw", 5, 100, 50),
+            [PlateRead("ABC123", 0.91, PlateBox(4, 6, 30, 12, 0.8))],
+            min_confidence=0.07,
+            jpeg=b"\xff\xd8jpeg",
+            last_texts={},
+        )
+        _wait(lambda: _plate_text(port) == "ABC123")
+        request = urllib.request.Request(f"http://127.0.0.1:{port}/api/reset", method="POST")
+        with urllib.request.urlopen(request, timeout=3) as response:
+            assert json.loads(response.read())["ok"] is True
+        assert store.history() == ()
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/api/reset", timeout=3)
+            raise AssertionError("GET must not reset")
+        except urllib.error.HTTPError as error:
+            assert error.code == 404
+    finally:
+        web.close()
+        api.close()

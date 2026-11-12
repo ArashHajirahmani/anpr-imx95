@@ -33,6 +33,20 @@
     font-weight: 600;
     letter-spacing: 0.14em;
   }
+  .status-box { display: flex; align-items: baseline; gap: 0.5rem; }
+  #reset {
+    background: none;
+    border: 1px solid #3a4a37;
+    border-radius: 3px;
+    color: #d7e0d4;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.8rem;
+    line-height: 1;
+    padding: 0.1rem 0.35rem;
+  }
+  #reset:hover { border-color: #39ff14; color: #39ff14; }
+  #reset:disabled { opacity: 0.5; cursor: default; }
   #status { margin: 0; font-size: 0.75rem; }
   #status.ok { color: #39ff14; }
   #status.wait { color: #d7e0d4; }
@@ -172,7 +186,10 @@
 <body>
 <header>
   <h1>ANPR</h1>
-  <p id="status" class="wait">connecting</p>
+  <div class="status-box">
+    <p id="status" class="wait">connecting</p>
+    <button id="reset" type="button" title="Reset plate memory" aria-label="Reset plate memory">&#8635;</button>
+  </div>
 </header>
 <p id="error">waiting for anpr api</p>
 <main>
@@ -202,6 +219,16 @@ const page = {
 
 let liveToken = "";
 let historyToken = "";
+document.getElementById("reset").addEventListener("click", (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  fetch("/api/reset", { method: "POST" })
+    .catch(() => {})
+    .finally(() => {
+      button.disabled = false;
+    });
+});
+
 let lastLive = null;
 let lastHistory = [];
 let heldStats = null;

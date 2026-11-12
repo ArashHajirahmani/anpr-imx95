@@ -241,6 +241,13 @@ class ClientCache:
                 "history": history,
             }
 
+    def clear_history(self) -> None:
+        """Drop the cached history so the page empties before the next poll."""
+        with self._lock:
+            self._history = []
+            self._history_jpeg = {}
+            self._history_keys = {}
+
     def latest_jpeg(self) -> bytes:
         with self._lock:
             return self._latest_jpeg
@@ -300,6 +307,28 @@ class WebHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             self._route(path)
+        except (BrokenPipeError, ConnectionResetError):
+            logger.debug("browser closed the connection")
+        except Exception:
+            logger.exception("web request failed for %s", path)
+            try:
+                self._send(500, _JSON, _dump({"error": "internal error"}))
+            except OSError:
+                logger.debug("browser closed the connection during the error response")
+
+    def do_POST(self) -> None:
+        path = urlparse(self.path).path
+        try:
+            if path != "/api/reset":
+                self._send(404, _JSON, _dump({"error": "not found"}))
+                return
+            cache = self.server.cache
+            status, _ = unix_request(cache.api_socket, "/v1/reset", 3.0, method="POST")
+            if status == 200:
+                cache.clear_history()
+            self._send(200 if status == 200 else 502, _JSON, _dump({"ok": status == 200}))
+        except OSError:
+            self._send(502, _JSON, _dump({"ok": False, "error": "api unreachable"}))
         except (BrokenPipeError, ConnectionResetError):
             logger.debug("browser closed the connection")
         except Exception:

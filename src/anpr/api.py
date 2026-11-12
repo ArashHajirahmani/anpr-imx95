@@ -117,6 +117,23 @@ class ApiHandler(BaseHTTPRequestHandler):
             except OSError:
                 logger.debug("client closed the connection during the error response")
 
+    def do_POST(self) -> None:
+        path = urlparse(self.path).path
+        try:
+            if path == "/v1/reset":
+                self.server.store.reset()
+                self._send(200, _JSON, _dump({"ok": True}))
+            else:
+                self._send(404, _JSON, _dump({"error": "not found"}))
+        except (BrokenPipeError, ConnectionResetError):
+            logger.debug("client closed the connection")
+        except Exception:
+            logger.exception("api request failed for %s", path)
+            try:
+                self._send(500, _JSON, _dump({"error": "internal error"}))
+            except OSError:
+                logger.debug("client closed the connection during the error response")
+
     def _route(self, path: str) -> None:
         if path == "/health":
             self._send(200, _JSON, _dump({"ok": True, "service": "anpr"}))

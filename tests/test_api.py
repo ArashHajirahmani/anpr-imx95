@@ -69,3 +69,32 @@ def test_api_serves_metadata_and_jpeg(tmp_path: Path, caplog: object) -> None:
         assert status == 404
     finally:
         service.close()
+
+
+def test_reset_clears_history_and_notifies_listeners(tmp_path: Path) -> None:
+    store = ResultStore(4)
+    notified: list[bool] = []
+    store.on_reset(lambda: notified.append(True))
+    socket_path = tmp_path / "api.sock"
+    service = ApiService(store, socket_path)
+    service.start()
+    try:
+        service.wait_until_ready(2)
+        store.record(
+            Frame("videoCapture", b"raw", 5, 100, 50),
+            [PlateRead("ABC123", 0.91, PlateBox(4, 6, 30, 12, 0.8))],
+            min_confidence=0.07,
+            jpeg=JPEG,
+            last_texts={},
+        )
+        _status, body = unix_request(str(socket_path), "/v1/history", 1)
+        assert json.loads(body)["items"]
+        status, _body = unix_request(str(socket_path), "/v1/reset", 1)
+        assert status == 404  # GET is not allowed to reset
+        status, body = unix_request(str(socket_path), "/v1/reset", 1, method="POST")
+        assert status == 200 and json.loads(body)["ok"] is True
+        _status, body = unix_request(str(socket_path), "/v1/history", 1)
+        assert json.loads(body)["items"] == []
+        assert notified == [True]
+    finally:
+        service.close()

@@ -21,11 +21,16 @@ class UnixHTTPConnection(http.client.HTTPConnection):
         self.sock = sock
 
 
-def unix_request(socket_path: str, path: str, timeout: float) -> tuple[int, bytes]:
-    """GET one path. Raises OSError when the socket cannot be used."""
+def unix_request(
+    socket_path: str,
+    path: str,
+    timeout: float,
+    method: str = "GET",
+) -> tuple[int, bytes]:
+    """Request one path (GET by default). Raises OSError when the socket cannot be used."""
     connection = UnixHTTPConnection(socket_path, timeout)
     try:
-        connection.request("GET", path)
+        connection.request(method, path)
         response = connection.getresponse()
         body = response.read()
         return response.status, body

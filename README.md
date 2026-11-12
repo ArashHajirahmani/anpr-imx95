@@ -29,6 +29,8 @@ Install paths on the board, used later, are `/opt/anpr` and `/etc/anpr/config.js
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
+# Host export tools (NXP eIQ Neutron SDK, onnx, onnxruntime, opencv, netron):
+.venv/bin/pip install -r requirements-host.txt
 .venv/bin/ruff check src tests tools
 .venv/bin/ruff format --check src tests tools
 .venv/bin/pytest

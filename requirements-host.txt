@@ -1,0 +1,23 @@
+# Host-side tools for model export and NPU conversion (not needed on the board).
+# Install into the project venv:
+#   python3 -m venv .venv
+#   .venv/bin/pip install -r requirements-host.txt
+#
+# eiq-* packages come from NXP's index. Keep eiq-neutron-sdk equal to the Neutron
+# driver version on the board (3.2.1 for LF 6.18); a mismatch gives
+# "Microcode version mismatch" at runtime. See docs/model-export.md.
+--extra-index-url https://eiq.nxp.com/repository/
+
+-e .[dev]
+
+eiq-neutron-sdk==3.2.1
+eiq-onnx2tflite==0.11.0
+numpy==2.5.4
+onnx==1.20.1
+onnxruntime==1.24.4
+opencv-python-headless==5.0.0.93
+# Optional graph viewer (see models/README.md): netron <model>.tflite
+netron>=9
+# Needed by tools/host/neutron_graph_report.py and the SDK scripts
+tflite==2.18.0
+matplotlib>=3.8

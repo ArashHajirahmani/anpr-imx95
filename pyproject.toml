@@ -35,4 +35,4 @@ src = ["src", "tests", "tools"]
 select = ["E", "F", "I", "UP"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["anpr", "export_int8"]
+known-first-party = ["anpr", "export_int8", "onnx_split_head"]

@@ -47,7 +47,7 @@ Run all four before calling a Python change done (the `anpr-verify` skill does t
 
 ## Current state (update when it changes)
 
-- Branch `wip/ocr-vote-roi` carries uncommitted work: ROI/vote tuning, the Neutron TFLite detector path (`convert_neutron_tflite.py`, `onnx_split_head.py`, split box/score outputs), and the staged pipeline (`staged.py`, `publisher.py`, `service.ocr_workers`).
+- Recent work is on `main`: the Neutron TFLite detector path (`convert_neutron_tflite.py`, `onnx_split_head.py`, split box/score outputs), the staged pipeline (`staged.py`, `publisher.py`, `service.ocr_workers`), exact-text confidence-squared voting (`vote.py`), and cheap fast web polling (`web.poll_seconds` is the minimum gap between polls).
 - Detector on the NPU: the head must be split into `boxes` and `scores` outputs (one `[1,5,N]` tensor quantizes every score to 0). Always compare NPU vs float detections on the calibration frames before deploying. See `docs/model-export.md`.
 - OCR stays on CPU (static INT8 of the CCT model diverges from float; weights-only quantization tracks it far better). The NPU cannot run it.
 - Staged pipeline: 1 detector thread (owns the interpreter) + `service.ocr_workers` (default 4) OCR workers + in-order publisher. The detector is compiled to end at raw DFL logits + scores and decoded in numpy (`decode_dfl_head`), so `det_ms` is about 43 ms. Board throughput with 4 workers: about 16 fps while frames flow (single-threaded was about 3.4); 3 workers gave about 9.4, 5 saturate the CPU. `/v1/latest` carries a backend-measured `fps` (3 s window) that the UI shows; the old UI estimate measured the 500 ms poll interval (about 2).

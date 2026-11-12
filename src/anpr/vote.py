@@ -1,10 +1,12 @@
-"""Temporal plate voting ladder.
+"""Temporal plate voting: windowed, confidence-weighted exact-text consensus.
 
-OCR candidates accumulate in a short window. High-trust reads still need a
-second agreeing sample before release so single-frame OCR flips (K↔M, missing
-digits) do not publish. Longer prefix/suffix-compatible strings win over
-shorter ones, and a sticky last release (kept per stream) blocks same-length
-near-duplicates until they outvote it.
+Every read in a short per-track window votes for its exact text with weight
+``confidence**2`` (down-weighted when a character margin or the blank mass says
+the read was a guess). Longer strings do not win by length: a hallucinated
+leading character (JAKW568, PAKW568) or a dropped one (AKW58) is just another
+spelling that must collect votes. A published (sticky) spelling is only
+replaced when a challenger has enough reads and clearly more vote weight, so
+single-frame flips (K to M, extra prefix) never reach the UI.
 """
 
 from __future__ import annotations
@@ -12,18 +14,18 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 
-from anpr.plate_match import clearly_better, same_identity
 from anpr.recognize import PlateRead
 from anpr.types import PlateBox
 
-HIGH_TRUST_MIN = 0.70
 MARGIN_TRUST = 0.10
+BLANK_TRUST = 0.25
+UNSURE_FACTOR = 0.25
 VOTE_WINDOW = 9
 VOTE_NEED = 2
-VOTE_NEED_WEAK = 3
 VOTE_NEED_SWITCH = 3
+VOTE_MIN_WEIGHT = 1.0
+SWITCH_RATIO = 1.5
 IOU_MATCH = 0.15
-NEAR_DUP_EDITS = 2
 
 
 @dataclass(frozen=True)
@@ -37,8 +39,6 @@ class _Track:
     samples: deque[VoteSample]
     box: PlateBox
     sticky: str = ""
-    sticky_confidence: float = 0.0
-    sticky_quality: float = 0.0
 
 
 class PlateVoteTracker:
@@ -47,78 +47,21 @@ class PlateVoteTracker:
     def __init__(self) -> None:
         self._tracks: dict[str, list[_Track]] = {}
         self._stream_sticky: dict[str, str] = {}
-        self._stream_sticky_confidence: dict[str, float] = {}
-        self._stream_sticky_quality: dict[str, float] = {}
 
     def consider(self, stream: str, read: PlateRead) -> PlateRead | None:
         track = self._match(stream, read.box)
         if not track.sticky:
             track.sticky = self._stream_sticky.get(stream, "")
-            track.sticky_confidence = self._stream_sticky_confidence.get(stream, 0.0)
-            track.sticky_quality = self._stream_sticky_quality.get(stream, 0.0)
-        weight = _sample_weight(read)
-        track.samples.append(VoteSample(read=read, weight=weight))
+        track.samples.append(VoteSample(read=read, weight=_sample_weight(read)))
         track.box = read.box
 
-        if _shorter_than_known(track, read.text):
-            longer = _known_longer(track, read.text)
-            for sample in reversed(track.samples):
-                if longer and sample.read.text == longer:
-                    return self._commit(stream, track, sample.read)
-            # Hold the longer sticky; do not publish a truncated majority.
+        weights, counts = _tally(track)
+        leader = _leader(weights, counts, track.sticky)
+        if leader is None or leader != read.text:
+            # Hold: the current frame does not belong to the winning spelling.
             return None
-
-        switching = bool(track.sticky) and read.text != track.sticky
-        if switching:
-            upgrade = _compatible_longer(track.sticky, read.text)
-            if upgrade == read.text and len(read.text) > len(track.sticky):
-                # Longer prefix/suffix of sticky (AKW568→CAKW568): easy upgrade.
-                return self._commit(
-                    stream,
-                    track,
-                    _majority_release(track, need=VOTE_NEED),
-                )
-            if same_identity(track.sticky, read.text) and clearly_better(
-                track.sticky_confidence,
-                read.confidence,
-                current_quality=track.sticky_quality,
-                new_quality=float(read.laplacian_var or 0.0),
-            ):
-                # Clearer OCR of the same plate (AXKW568→CAKW568 @ higher conf).
-                # Require two agreeing better reads; do not re-emit sticky garbage.
-                if _agreeing_count(track, read.text) >= VOTE_NEED:
-                    return self._commit(stream, track, read)
-                return None
-            if _near_duplicate(track.sticky, read.text) or upgrade is None:
-                return self._commit(
-                    stream,
-                    track,
-                    _majority_release(track, need=VOTE_NEED_SWITCH),
-                )
-
-        if (
-            _high_trust(read)
-            and not _has_near_duplicate_competitor(track, read)
-            and _agreeing_count(track, read.text) >= VOTE_NEED
-        ):
-            return self._commit(stream, track, read)
-
-        return self._commit(stream, track, _majority_release(track))
-
-    def _commit(
-        self,
-        stream: str,
-        track: _Track,
-        read: PlateRead | None,
-    ) -> PlateRead | None:
-        if read is None:
-            return None
-        track.sticky = read.text
-        track.sticky_confidence = float(read.confidence)
-        track.sticky_quality = float(read.laplacian_var or 0.0)
-        self._stream_sticky[stream] = read.text
-        self._stream_sticky_confidence[stream] = track.sticky_confidence
-        self._stream_sticky_quality[stream] = track.sticky_quality
+        track.sticky = leader
+        self._stream_sticky[stream] = leader
         return read
 
     def _match(self, stream: str, box: PlateBox) -> _Track:
@@ -132,203 +75,53 @@ class PlateVoteTracker:
                 best = track
         if best is not None and best_iou >= IOU_MATCH:
             return best
-        track = _Track(samples=deque(maxlen=VOTE_WINDOW), box=box)
-        sticky = self._stream_sticky.get(stream, "")
-        if sticky:
-            track.sticky = sticky
-            track.sticky_confidence = self._stream_sticky_confidence.get(stream, 0.0)
-            track.sticky_quality = self._stream_sticky_quality.get(stream, 0.0)
+        track = _Track(
+            samples=deque(maxlen=VOTE_WINDOW),
+            box=box,
+            sticky=self._stream_sticky.get(stream, ""),
+        )
         tracks.append(track)
         if len(tracks) > 16:
             del tracks[:-16]
         return track
 
 
-def _high_trust(read: PlateRead) -> bool:
-    if read.confidence < HIGH_TRUST_MIN:
-        return False
-    if read.char_confidences and min(read.char_confidences) < HIGH_TRUST_MIN:
-        return False
-    if read.char_margins and any(margin < MARGIN_TRUST for margin in read.char_margins):
-        return False
-    if read.blank_uncertainty >= 0.25:
-        return False
-    return True
-
-
-def _agreeing_count(track: _Track, text: str) -> int:
-    count = 0
+def _tally(track: _Track) -> tuple[dict[str, float], dict[str, int]]:
+    weights: dict[str, float] = {}
+    counts: dict[str, int] = {}
     for sample in track.samples:
-        preferred = _compatible_longer(sample.read.text, text)
-        if preferred == text or sample.read.text == text:
-            count += 1
-    return count
+        text = sample.read.text
+        weights[text] = weights.get(text, 0.0) + sample.weight
+        counts[text] = counts.get(text, 0) + 1
+    return weights, counts
 
 
-def _shorter_than_known(track: _Track, text: str) -> bool:
-    """True when sticky or window already has a longer compatible plate."""
-    return _known_longer(track, text) is not None
-
-
-def _known_longer(track: _Track, text: str) -> str | None:
-    texts = [sample.read.text for sample in track.samples]
-    if track.sticky:
-        texts.append(track.sticky)
-    best: str | None = None
-    for known in texts:
-        preferred = _compatible_longer(known, text)
-        if preferred is not None and len(preferred) > len(text):
-            if best is None or len(preferred) > len(best):
-                best = preferred
-            continue
-        # Single-character drop of a longer sticky/window read (AKW568→AKW58).
-        if _is_one_char_shorter(known, text):
-            if best is None or len(known) > len(best):
-                best = known
-    return best
-
-
-def _is_one_char_shorter(longer: str, shorter: str) -> bool:
-    if not longer or not shorter or len(longer) != len(shorter) + 1:
-        return False
-    for index in range(len(longer)):
-        if longer[:index] + longer[index + 1 :] == shorter:
-            return True
-    return False
-
-
-def _has_near_duplicate_competitor(track: _Track, read: PlateRead) -> bool:
-    texts = [sample.read.text for sample in track.samples]
-    if track.sticky:
-        texts.append(track.sticky)
-    for text in texts:
-        if text == read.text:
-            continue
-        if _near_duplicate(text, read.text):
-            return True
-    return False
-
-
-def _near_duplicate(left: str, right: str) -> bool:
-    if left == right or not left or not right:
-        return False
-    if _compatible_longer(left, right) is not None:
-        return False
-    if len(left) != len(right):
-        return False
-    return sum(a != b for a, b in zip(left, right, strict=True)) <= NEAR_DUP_EDITS
-
-
-def _majority_release(
-    track: _Track,
-    need: int | None = None,
-) -> PlateRead | None:
-    if not track.samples:
-        return None
-    if need is None:
-        need = VOTE_NEED_WEAK if _weak_quality(track.samples[-1].read) else VOTE_NEED
-    if len(track.samples) < need:
-        return None
-
-    groups: dict[str, list[VoteSample]] = {}
-    for sample in track.samples:
-        placed = False
-        for key in list(groups):
-            preferred = _compatible_longer(key, sample.read.text)
-            if preferred is None:
-                continue
-            bucket = groups.pop(key)
-            bucket.append(sample)
-            groups.setdefault(preferred, []).extend(bucket)
-            placed = True
-            break
-        if not placed:
-            groups.setdefault(sample.read.text, []).append(sample)
-
-    best_text = ""
-    best_score = -1.0
-    best_read: PlateRead | None = None
-    best_count = 0
-    for text, bucket in groups.items():
-        score = sum(item.weight for item in bucket)
-        count = len(bucket)
-        read = max(
-            bucket,
-            key=lambda item: (len(item.read.text), item.read.confidence),
-        ).read
-        if count < need:
-            continue
-        better_len = len(text) > len(best_text)
-        better_conf = len(text) == len(best_text) and read.confidence > (
-            best_read.confidence if best_read else -1.0
-        )
-        if score > best_score or (score == best_score and (better_len or better_conf)):
-            best_text = text
-            best_score = score
-            best_read = read
-            best_count = count
-    if best_read is None or best_count < need:
-        return None
-    preferred = _compatible_longer(best_read.text, best_text)
-    if best_read.text != best_text and preferred == best_text:
-        return PlateRead(
-            text=best_text,
-            confidence=best_read.confidence,
-            box=best_read.box,
-            char_confidences=best_read.char_confidences,
-            char_margins=best_read.char_margins,
-            blank_uncertainty=best_read.blank_uncertainty,
-            laplacian_var=best_read.laplacian_var,
-            brightness=best_read.brightness,
-            contrast=best_read.contrast,
-            pre_ocr_bgr=best_read.pre_ocr_bgr,
-            pre_ocr_width=best_read.pre_ocr_width,
-            pre_ocr_height=best_read.pre_ocr_height,
-        )
-    return best_read
-
-
-def _compatible_longer(left: str, right: str) -> str | None:
-    """Prefer the longer string when one is a prefix or suffix of the other.
-
-    Middle-character insertions (AXKW568 vs AKW568) are not compatible — those
-    must compete through the near-duplicate / switch vote path.
-    """
-    if left == right:
-        return left
-    if not left or not right:
-        return None
-    if left.endswith(right) or right.endswith(left):
-        return left if len(left) >= len(right) else right
-    if left.startswith(right) or right.startswith(left):
-        return left if len(left) >= len(right) else right
+def _leader(weights: dict[str, float], counts: dict[str, int], sticky: str) -> str | None:
+    """Spelling that currently owns the track, or None when nothing is proven."""
+    challenger = max(weights, key=lambda text: (weights[text], counts[text]), default="")
+    if sticky:
+        if challenger == sticky or not challenger:
+            return sticky
+        # A sticky spelling stays until a challenger clearly outvotes it.
+        if (
+            counts[challenger] >= VOTE_NEED_SWITCH
+            and weights[challenger] >= SWITCH_RATIO * weights.get(sticky, 0.0)
+            and weights[challenger] >= VOTE_MIN_WEIGHT
+        ):
+            return challenger
+        return sticky
+    if counts[challenger] >= VOTE_NEED and weights[challenger] >= VOTE_MIN_WEIGHT:
+        return challenger
     return None
 
 
-def _prefer_longer_suffix(left: str, right: str) -> str | None:
-    """Backward-compatible alias used by older tests/callers."""
-    return _compatible_longer(left, right)
-
-
 def _sample_weight(read: PlateRead) -> float:
-    return max(0.05, float(read.confidence)) * _quality_weight(read)
-
-
-def _quality_weight(read: PlateRead) -> float:
-    score = 1.0
-    if read.laplacian_var > 0.0:
-        score *= min(max(read.laplacian_var / 40.0, 0.4), 1.3)
-    if read.contrast > 0.0:
-        score *= min(max(read.contrast / 25.0, 0.4), 1.3)
-    return max(0.3, min(score, 1.5))
-
-
-def _weak_quality(read: PlateRead) -> bool:
-    if read.laplacian_var > 0.0 and read.laplacian_var < 40.0:
-        return True
-    if read.contrast > 0.0 and read.contrast < 25.0:
-        return True
-    return False
+    weight = max(0.05, float(read.confidence)) ** 2
+    if read.char_margins and min(read.char_margins) < MARGIN_TRUST:
+        weight *= UNSURE_FACTOR
+    if read.blank_uncertainty >= BLANK_TRUST:
+        weight *= UNSURE_FACTOR
+    return weight
 
 
 def _box_iou(left: PlateBox, right: PlateBox) -> float:

@@ -10,12 +10,11 @@ def _read(
     x: int = 10,
     margins: tuple[float, ...] | None = None,
 ) -> PlateRead:
-    chars = tuple(confidence for _ in text)
     return PlateRead(
         text=text,
         confidence=confidence,
         box=PlateBox(x, 20, 100, 40, 0.8),
-        char_confidences=chars,
+        char_confidences=tuple(confidence for _ in text),
         char_margins=margins or tuple(0.2 for _ in text),
         blank_uncertainty=0.0,
         laplacian_var=80.0,
@@ -24,97 +23,76 @@ def _read(
     )
 
 
-def test_high_trust_needs_second_agreeing_sample() -> None:
+def _feed(tracker: PlateVoteTracker, text: str, confidences: tuple[float, ...], **kw):
+    return [tracker.consider("cam", _read(text, c, **kw)) for c in confidences]
+
+
+def _settled(tracker: PlateVoteTracker, text: str = "AXKW568") -> None:
+    out = _feed(tracker, text, (0.8, 0.8))
+    assert out[0] is None and out[1] is not None and out[1].text == text
+
+
+def test_release_needs_second_agreeing_sample() -> None:
     tracker = PlateVoteTracker()
-    assert tracker.consider("cam", _read("CAKW568", 0.85)) is None
-    out = tracker.consider("cam", _read("CAKW568", 0.88))
+    assert tracker.consider("cam", _read("AXKW568", 0.9)) is None
+    out = tracker.consider("cam", _read("AXKW568", 0.9))
     assert out is not None
-    assert out.text == "CAKW568"
+    assert out.text == "AXKW568"
 
 
-def test_majority_prefers_longer_suffix() -> None:
+def test_two_weak_agreeing_reads_do_not_release() -> None:
     tracker = PlateVoteTracker()
-    weak = (0.05, 0.2, 0.2, 0.2, 0.2, 0.2)
-    assert tracker.consider("cam", _read("AKW568", 0.2, margins=weak)) is None
-    out = tracker.consider(
-        "cam",
-        _read("CAKW568", 0.2, margins=weak + (0.2,)),
-    )
-    assert out is not None
-    assert out.text == "CAKW568"
+    assert _feed(tracker, "AXKW568", (0.5, 0.5)) == [None, None]
 
 
-def test_low_margin_does_not_early_release() -> None:
+def test_unsure_margin_read_is_down_weighted() -> None:
     tracker = PlateVoteTracker()
-    out = tracker.consider(
-        "cam",
-        _read("CAKW568", 0.9, margins=(0.02, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2)),
-    )
-    assert out is None
+    unsure = (0.02, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2)
+    assert _feed(tracker, "AXKW568", (0.9, 0.9), margins=unsure) == [None, None]
 
 
-def test_single_frame_near_duplicate_does_not_override_sticky() -> None:
+def test_longer_spelling_does_not_win_by_length() -> None:
     tracker = PlateVoteTracker()
-    assert tracker.consider("cam", _read("AKW568", 0.95)) is None
-    first = tracker.consider("cam", _read("AKW568", 0.96))
-    assert first is not None and first.text == "AKW568"
-    assert tracker.consider("cam", _read("AMW568", 0.99)) is None
-    assert tracker.consider("cam", _read("AMW568", 0.98)) is None
-    switched = tracker.consider("cam", _read("AMW568", 0.97))
-    assert switched is not None
-    assert switched.text == "AMW568"
+    _settled(tracker, "AKW568")
+    # A spurious leading character is a different spelling, not an upgrade.
+    assert _feed(tracker, "JAKW568", (0.8, 0.8)) == [None, None]
+    out = tracker.consider("cam", _read("AKW568", 0.8))
+    assert out is not None and out.text == "AKW568"
 
 
-def test_sticky_blocks_shorter_suffix_high_trust() -> None:
+def test_one_off_substitution_does_not_override_sticky() -> None:
     tracker = PlateVoteTracker()
-    assert tracker.consider("cam", _read("CAKW568", 0.9)) is None
-    assert tracker.consider("cam", _read("CAKW568", 0.91)).text == "CAKW568"
-    # Shorter suffix must not replace sticky; majority may reaffirm the longer text.
-    out = tracker.consider("cam", _read("AKW568", 0.99))
-    assert out is None or out.text == "CAKW568"
-    out = tracker.consider("cam", _read("AKW568", 0.99))
-    assert out is None or out.text == "CAKW568"
-
-
-def test_middle_insertion_does_not_beat_sticky() -> None:
-    tracker = PlateVoteTracker()
-    assert tracker.consider("cam", _read("AKW568", 0.95)) is None
-    assert tracker.consider("cam", _read("AKW568", 0.96)).text == "AKW568"
-    assert tracker.consider("cam", _read("AXKW568", 0.99)) is None
-    assert tracker.consider("cam", _read("AXKW568", 0.98)) is None
-
-
-def test_stream_sticky_survives_box_jump() -> None:
-    tracker = PlateVoteTracker()
-    assert tracker.consider("cam", _read("AKW568", 0.95, x=10)) is None
-    assert tracker.consider("cam", _read("AKW568", 0.96, x=10)).text == "AKW568"
-    # Far box → new track, but stream sticky still blocks a one-off typo.
-    assert tracker.consider("cam", _read("AMW568", 0.99, x=400)) is None
-
-
-def test_longer_prefix_upgrades_sticky() -> None:
-    tracker = PlateVoteTracker()
-    assert tracker.consider("cam", _read("AKW568", 0.95)) is None
-    assert tracker.consider("cam", _read("AKW568", 0.96)).text == "AKW568"
-    out = tracker.consider("cam", _read("CAKW568", 0.80))
-    assert out is not None
-    assert out.text == "CAKW568"
+    _settled(tracker)
+    assert tracker.consider("cam", _read("CAKW568", 0.71)) is None
+    assert tracker.consider("cam", _read("CAKW568", 0.71)) is None
+    out = tracker.consider("cam", _read("AXKW568", 0.78))
+    assert out is not None and out.text == "AXKW568"
 
 
 def test_truncation_does_not_replace_sticky() -> None:
     tracker = PlateVoteTracker()
-    assert tracker.consider("cam", _read("AKW568", 0.95)) is None
-    assert tracker.consider("cam", _read("AKW568", 0.96)).text == "AKW568"
-    for conf in (0.99, 0.98, 0.97):
-        out = tracker.consider("cam", _read("AKW58", conf))
-        assert out is None or out.text == "AKW568"
+    _feed(tracker, "AKW568", (0.9, 0.9, 0.9, 0.9))
+    assert _feed(tracker, "AKW58", (0.99, 0.99, 0.99)) == [None, None, None]
 
 
-def test_clearer_near_duplicate_upgrades_with_two_votes() -> None:
+def test_higher_confidence_alone_does_not_flip_the_plate() -> None:
     tracker = PlateVoteTracker()
-    assert tracker.consider("cam", _read("AXKW568", 0.77)) is None
-    assert tracker.consider("cam", _read("AXKW568", 0.78)).text == "AXKW568"
-    assert tracker.consider("cam", _read("CAKW568", 0.94)) is None
-    out = tracker.consider("cam", _read("CAKW568", 0.95))
-    assert out is not None
-    assert out.text == "CAKW568"
+    _feed(tracker, "AXKW568", (0.78, 0.78, 0.78, 0.78))
+    assert _feed(tracker, "CAKW568", (0.95, 0.95)) == [None, None]
+
+
+def test_sustained_challenger_switches() -> None:
+    tracker = PlateVoteTracker()
+    _settled(tracker, "AKW568")
+    outs = _feed(tracker, "AMW568", (0.95,) * 4)
+    assert outs[:2] == [None, None]
+    assert outs[-1] is not None and outs[-1].text == "AMW568"
+
+
+def test_stream_sticky_survives_box_jump() -> None:
+    tracker = PlateVoteTracker()
+    _settled(tracker, "AKW568")
+    # Far box starts a new track; the stream sticky still blocks a one-off typo.
+    assert tracker.consider("cam", _read("AMW568", 0.99, x=400)) is None
+    out = tracker.consider("cam", _read("AKW568", 0.9, x=400))
+    assert out is not None and out.text == "AKW568"

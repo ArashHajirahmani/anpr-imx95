@@ -104,3 +104,44 @@ def _wait(predicate: object) -> None:
             return
         time.sleep(0.02)
     raise AssertionError("timed out")
+
+
+def test_poll_is_one_request_when_nothing_changed(tmp_path: Path, monkeypatch: object) -> None:
+    import anpr.web as web_module
+    from anpr.web import ClientCache
+
+    socket_path = tmp_path / "api.sock"
+    store = ResultStore(4)
+    api = ApiService(store, socket_path)
+    api.start()
+    api.wait_until_ready(2)
+    paths: list[str] = []
+    real = web_module.unix_request
+
+    def counting(socket: str, path: str, timeout: float) -> tuple[int, bytes]:
+        paths.append(path)
+        return real(socket, path, timeout)
+
+    monkeypatch.setattr(web_module, "unix_request", counting)
+    try:
+        cache = ClientCache(str(socket_path))
+        frame = Frame("videoCapture", b"raw", 9, 200, 100)
+        plate = PlateRead("ABC123", 0.82, PlateBox(20, 30, 80, 24, 0.77))
+        store.record(frame, [plate], min_confidence=0.07, jpeg=JPEG, last_texts={})
+        cache.poll(1)
+        assert "/v1/latest.jpg" in paths
+        assert "/v1/history/1.jpg" in paths
+
+        paths.clear()
+        cache.poll(1)
+        assert paths == ["/v1/latest"]
+        assert cache.state()["ok"] is True
+
+        paths.clear()
+        store.record(frame, [], min_confidence=0.07, jpeg=JPEG, last_texts={})
+        cache.poll(1)
+        assert "/v1/latest.jpg" in paths
+        assert "/v1/history" in paths
+        assert not any(path.startswith("/v1/history/") for path in paths)
+    finally:
+        api.close()

@@ -107,6 +107,7 @@ class ClientCache:
         self._latest_jpeg = b""
         self._history: list[dict[str, object]] = []
         self._history_jpeg: dict[int, bytes] = {}
+        self._history_keys: dict[int, tuple[object, ...]] = {}
         self._history_limit = 4
         self._last_heartbeat = time.monotonic()
 
@@ -121,9 +122,12 @@ class ClientCache:
             logger.warning("anpr api unreachable at %s: %s", self.api_socket, message)
 
     def poll(self, timeout: float) -> None:
-        status, _body = unix_request(self.api_socket, "/health", timeout)
-        if status != 200:
-            raise OSError(f"health status {status}")
+        """Refresh the snapshot. Cheap when nothing is new.
+
+        Latest frame and history change together under one lock in the result store, so an
+        unchanged ``frame_id`` means there is nothing else to fetch. The JPEG is fetched for
+        a new frame only, and a history image only when its card changed.
+        """
         status, body = unix_request(self.api_socket, "/v1/latest", timeout)
         latest: dict[str, object] | None
         jpeg = b""
@@ -133,6 +137,9 @@ class ClientCache:
             raise OSError(f"latest status {status}")
         else:
             latest = _object(body)
+            if self._unchanged(latest.get("frame_id")):
+                self._mark_reachable()
+                return
             status, jpeg = unix_request(self.api_socket, "/v1/latest.jpg", timeout)
             if status != 200 or not jpeg:
                 raise OSError(f"latest frame status {status}")
@@ -146,26 +153,52 @@ class ClientCache:
         limit = history.get("limit")
         if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
             limit = len(items) or 4
+        with self._lock:
+            known = dict(self._history_keys)
+            cached = dict(self._history_jpeg)
         parsed: list[dict[str, object]] = []
         images: dict[int, bytes] = {}
+        keys: dict[int, tuple[object, ...]] = {}
         for item in items:
             if not isinstance(item, dict):
                 raise OSError("history item is not an object")
             event_id = item.get("id")
             if isinstance(event_id, bool) or not isinstance(event_id, int):
                 raise OSError("history item is missing an id")
-            status, image = unix_request(
-                self.api_socket,
-                f"/v1/history/{event_id}.jpg",
-                timeout,
-            )
-            if status != 200 or not image:
-                raise OSError(f"history frame {event_id} status {status}")
-            images[event_id] = image
+            key = (item.get("frame_id"), item.get("text"), item.get("confidence"))
+            keys[event_id] = key
+            if known.get(event_id) == key and event_id in cached:
+                images[event_id] = cached[event_id]
+            else:
+                status, image = unix_request(
+                    self.api_socket,
+                    f"/v1/history/{event_id}.jpg",
+                    timeout,
+                )
+                if status != 200 or not image:
+                    raise OSError(f"history frame {event_id} status {status}")
+                images[event_id] = image
             parsed.append(item)
-        self._commit(latest, jpeg, parsed, images, limit)
+        self._commit(latest, jpeg, parsed, images, limit, keys)
         frame_id = latest.get("frame_id") if latest is not None else "none"
         logger.debug("poll frame=%s history=%d", frame_id, len(parsed))
+
+    def _unchanged(self, frame_id: object) -> bool:
+        with self._lock:
+            return (
+                self.ok
+                and self._latest is not None
+                and bool(self._latest_jpeg)
+                and self._latest.get("frame_id") == frame_id
+            )
+
+    def _mark_reachable(self) -> None:
+        with self._lock:
+            changed = self._reachable is not True
+            self._reachable = True
+            self.error = None
+        if changed:
+            logger.info("anpr api reachable at %s", self.api_socket)
 
     def maybe_heartbeat(self) -> None:
         now = time.monotonic()
@@ -223,6 +256,7 @@ class ClientCache:
         items: list[dict[str, object]],
         images: dict[int, bytes],
         limit: int,
+        keys: dict[int, tuple[object, ...]] | None = None,
     ) -> None:
         with self._lock:
             previous = {item.get("id") for item in self._history}
@@ -234,6 +268,7 @@ class ClientCache:
             self._latest_jpeg = jpeg
             self._history = items
             self._history_jpeg = images
+            self._history_keys = keys or {}
             self._history_limit = limit
         if changed:
             logger.info("anpr api reachable at %s", self.api_socket)

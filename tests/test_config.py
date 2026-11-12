@@ -37,7 +37,7 @@ def test_example_config_loads() -> None:
     assert config.service.history_limit == 10
     assert config.web.listen_host == "0.0.0.0"
     assert config.web.listen_port == 8080
-    assert config.web.poll_seconds == 0.5
+    assert config.web.poll_seconds == 0.02
     assert config.detector.npu_path.endswith("plate_detector.neutron.tflite")
     assert config.detector.delegate_path.endswith("libneutron_delegate.so")
     assert config.recognizer.npu_path.endswith("cct_s_v2_global.int8.onnx")

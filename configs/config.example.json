@@ -74,6 +74,6 @@
   "web": {
     "listen_host": "0.0.0.0",
     "listen_port": 8080,
-    "poll_seconds": 0.5
+    "poll_seconds": 0.02
   }
 }

@@ -209,6 +209,11 @@ let heldStatsUntil = 0;
 let lastMonoNs = null;
 let measuredFps = null;
 
+const POLL_MS = 30;
+const ERROR_POLL_MS = 500;
+
+// Chain requests instead of a fixed timer: the next poll starts POLL_MS after the last
+// response, so the page follows the backend as fast as the web process updates.
 function tick() {
   fetch("/api/state", { cache: "no-store" })
     .then((response) => {
@@ -217,12 +222,16 @@ function tick() {
       }
       return response.json();
     })
-    .then(render)
+    .then((state) => {
+      render(state);
+      setTimeout(tick, POLL_MS);
+    })
     .catch((error) => {
       page.error.hidden = false;
       page.error.textContent = "page lost the web client: " + error;
       page.status.textContent = "api down";
       page.status.className = "down";
+      setTimeout(tick, ERROR_POLL_MS);
     });
 }
 
@@ -605,7 +614,6 @@ page.liveImage.addEventListener("load", redrawLive);
 window.addEventListener("resize", redrawLive);
 
 tick();
-setInterval(tick, 500);
 setInterval(paintMeta, 250);
 </script>
 </body>

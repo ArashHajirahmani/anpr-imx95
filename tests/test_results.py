@@ -296,3 +296,25 @@ def pytest_cv2() -> object:
 
 def pytest_numpy() -> object:
     return pytest.importorskip("numpy")
+
+
+def test_store_reports_published_frames_per_second() -> None:
+    store = ResultStore(4)
+    assert store._measure_fps(0.0) is None  # one sample is not a rate
+    assert store._measure_fps(0.5) == pytest.approx(2.0)
+    for tick in range(1, 6):
+        fps = store._measure_fps(0.5 + tick * 0.1)
+    assert fps == pytest.approx(6.0)  # 7 samples over 1.0 s = 6 intervals
+    # Frames older than the window drop out, so a long pause is not averaged in.
+    assert store._measure_fps(100.0) is None
+    assert store._measure_fps(100.1) == pytest.approx(10.0)
+
+
+def test_latest_json_carries_fps_after_two_frames() -> None:
+    store = ResultStore(4)
+    frame = Frame("videoCapture", b"raw", 5, 100, 50)
+    for _ in range(2):
+        store.record(frame, [], min_confidence=0.07, jpeg=b"\xff\xd8\xff\xd9", last_texts={})
+    latest = store.latest()
+    assert latest is not None
+    assert latest.json()["fps"] > 0

@@ -288,8 +288,13 @@ function renderLive(latest, history) {
 }
 
 function updateFps(latest) {
+  // Prefer the backend's published-frames-per-second. The browser only polls twice a
+  // second, so the gap between the frames it happens to see measures the poll rate.
+  const reported = latest.fps === undefined || latest.fps === null ? NaN : Number(latest.fps);
   const mono = Number(latest.monotonic_ns);
-  if (Number.isFinite(mono) && lastMonoNs !== null && mono > lastMonoNs) {
+  if (Number.isFinite(reported)) {
+    measuredFps = reported;
+  } else if (Number.isFinite(mono) && lastMonoNs !== null && mono > lastMonoNs) {
     const seconds = (mono - lastMonoNs) / 1e9;
     if (seconds > 0) {
       measuredFps = 1 / seconds;

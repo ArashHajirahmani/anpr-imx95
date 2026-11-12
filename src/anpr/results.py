@@ -7,6 +7,7 @@ the matching slot (best text + best crop) instead of opening a new entry.
 
 import logging
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -17,6 +18,8 @@ from anpr.recognize import PlateRead
 from anpr.types import Frame, PlateBox
 
 logger = logging.getLogger("anpr.results")
+
+_FPS_WINDOW_SECONDS = 3.0
 
 
 @dataclass(frozen=True)
@@ -39,6 +42,8 @@ class LatestView:
     jpeg: bytes
     plates: tuple[PlateRead, ...]
     timing: FrameTiming | None = None
+    # Frames published per second over the last few seconds (backend-measured).
+    fps: float | None = None
 
     def json(self) -> dict[str, object]:
         ordered = sorted(self.plates, key=lambda read: read.confidence, reverse=True)
@@ -52,6 +57,8 @@ class LatestView:
             "plates": [_plate_json(read) for read in ordered],
         }
         payload.update(_timing_json(self.timing))
+        if self.fps is not None:
+            payload["fps"] = round(self.fps, 1)
         return payload
 
 
@@ -111,6 +118,7 @@ class ResultStore:
         self._event_id = 0
         self._latest: LatestView | None = None
         self._slots: list[_PlateSlot] = []
+        self._frame_times: deque[float] = deque()
 
     @property
     def history_limit(self) -> int:
@@ -119,6 +127,16 @@ class ResultStore:
     def latest(self) -> LatestView | None:
         with self._lock:
             return self._latest
+
+    def _measure_fps(self, now: float) -> float | None:
+        """Published frames per second over the last `_FPS_WINDOW_SECONDS` (lock held)."""
+        times = self._frame_times
+        times.append(now)
+        while times and now - times[0] > _FPS_WINDOW_SECONDS:
+            times.popleft()
+        if len(times) < 2 or now <= times[0]:
+            return None
+        return (len(times) - 1) / (now - times[0])
 
     def history(self) -> tuple[HistoryView, ...]:
         with self._lock:
@@ -211,6 +229,7 @@ class ResultStore:
         with self._lock:
             self._frame_id += 1
             frame_id = self._frame_id
+            fps = self._measure_fps(time.monotonic())
             self._latest = LatestView(
                 stream=frame.stream_name,
                 frame_id=frame_id,
@@ -221,6 +240,7 @@ class ResultStore:
                 jpeg=jpeg,
                 plates=tuple(accepted),
                 timing=timing,
+                fps=fps,
             )
             for read, plate_jpeg, plate_width, plate_height in prepared:
                 self._upsert_slot(
@@ -396,9 +416,7 @@ def classify_reads(
         ):
             accepted.append(read)
             continue
-        min_char = (
-            min(read.char_confidences) if read.char_confidences else read.confidence
-        )
+        min_char = min(read.char_confidences) if read.char_confidences else read.confidence
         logger.info(
             "ocr reject %s text=%s min_char=%.2f floor=%.2f char_floor=%s",
             stream,
@@ -426,11 +444,7 @@ def pre_ocr_jpeg(
     """JPEG of the enhancer output that OCR resized. Falls back when absent."""
     import numpy as np
 
-    if (
-        not read.pre_ocr_bgr
-        or read.pre_ocr_width < 2
-        or read.pre_ocr_height < 2
-    ):
+    if not read.pre_ocr_bgr or read.pre_ocr_width < 2 or read.pre_ocr_height < 2:
         return None
     expected = read.pre_ocr_width * read.pre_ocr_height * 3
     if len(read.pre_ocr_bgr) < expected:

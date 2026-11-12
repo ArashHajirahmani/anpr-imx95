@@ -98,3 +98,23 @@ def test_reset_clears_history_and_notifies_listeners(tmp_path: Path) -> None:
         assert notified == [True]
     finally:
         service.close()
+
+
+def test_system_endpoint_serves_pipeline_facts(tmp_path: Path) -> None:
+    store = ResultStore(4)
+    socket_path = tmp_path / "api.sock"
+    service = ApiService(store, socket_path)
+    service.start()
+    try:
+        service.wait_until_ready(2)
+        status, _body = unix_request(str(socket_path), "/v1/system", 1)
+        assert status == 503
+        info = {"detector": {"device": "npu"}, "ocr": {"device": "cpu", "workers": 4}}
+        store.set_system(info, lambda: {"cpu_percent": 12.5, "npu_busy_percent": 3.0})
+        status, body = unix_request(str(socket_path), "/v1/system", 1)
+        assert status == 200
+        payload = json.loads(body)
+        assert payload["pipeline"]["ocr"] == {"device": "cpu", "workers": 4}
+        assert payload["system"]["npu_busy_percent"] == 3.0
+    finally:
+        service.close()

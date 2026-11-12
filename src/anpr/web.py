@@ -19,6 +19,7 @@ logger = logging.getLogger("anpr.web")
 _PAGE_PATH = Path(__file__).resolve().parent / "static" / "index.html"
 _PAGE = _PAGE_PATH.read_bytes()
 _HEARTBEAT_SECONDS = 30.0
+_SYSTEM_SECONDS = 1.0
 _JSON = "application/json; charset=utf-8"
 _HISTORY_MEDIA = re.compile(r"^/media/history/(\d+)\.jpg$")
 
@@ -87,6 +88,7 @@ class WebService:
             except Exception:
                 logger.exception("api poll failed")
                 self._cache.fail("api poll failed")
+            self._cache.poll_system(timeout)
             self._cache.maybe_heartbeat()
             remaining = self.poll_seconds - (time.monotonic() - started)
             if remaining > 0 and self._stop.wait(remaining):
@@ -109,6 +111,8 @@ class ClientCache:
         self._history_jpeg: dict[int, bytes] = {}
         self._history_keys: dict[int, tuple[object, ...]] = {}
         self._history_limit = 4
+        self._system: dict[str, object] = {}
+        self._last_system = 0.0
         self._last_heartbeat = time.monotonic()
 
     def fail(self, message: str) -> None:
@@ -239,7 +243,22 @@ class ClientCache:
                 "history_limit": self._history_limit,
                 "latest": latest,
                 "history": history,
+                "system": self._system,
             }
+
+    def poll_system(self, timeout: float) -> None:
+        """Refresh pipeline facts and CPU/memory/NPU load, at most once a second."""
+        now = time.monotonic()
+        if now - self._last_system < _SYSTEM_SECONDS:
+            return
+        self._last_system = now
+        try:
+            status, body = unix_request(self.api_socket, "/v1/system", timeout)
+            payload = _object(body) if status == 200 else {}
+        except (OSError, ValueError):
+            return
+        with self._lock:
+            self._system = payload
 
     def clear_history(self) -> None:
         """Drop the cached history so the page empties before the next poll."""

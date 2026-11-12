@@ -177,3 +177,34 @@ def test_reset_button_posts_through_to_the_store(tmp_path: Path) -> None:
     finally:
         web.close()
         api.close()
+
+
+def test_state_carries_backend_system_facts_and_page_shows_no_history_timing(
+    tmp_path: Path,
+) -> None:
+    socket_path = tmp_path / "api.sock"
+    store = ResultStore(4)
+    store.set_system(
+        {
+            "detector": {"device": "npu", "model": "d.tflite"},
+            "ocr": {"device": "cpu", "workers": 4},
+        },
+        lambda: {"cpu_percent": 40.0, "mem_used_mb": 2000, "mem_total_mb": 7600},
+    )
+    api = ApiService(store, socket_path)
+    api.start()
+    web = WebService(socket_path, "127.0.0.1", 0, 0.05)
+    _host, port = web.start()
+    try:
+        api.wait_until_ready(2)
+        _wait(lambda: json.loads(_get(port, "/api/state")).get("system"))
+        system = json.loads(_get(port, "/api/state"))["system"]
+        assert system["pipeline"]["ocr"]["workers"] == 4
+        assert system["system"]["cpu_percent"] == 40.0
+        page = _get(port, "/")
+        assert b"foot-system" in page and b"foot-pipeline" in page
+        assert b"runtimeLabel" not in page
+        assert b"item.detector_ms" not in page
+    finally:
+        web.close()
+        api.close()

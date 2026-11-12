@@ -180,7 +180,12 @@
     padding: 0.15rem 0.55rem 0.3rem;
     color: #7d8b7a;
     font-size: 0.65rem;
+    display: grid;
+    gap: 0.1rem;
   }
+  .foot-row { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+  .foot-label { color: #d7e0d4; letter-spacing: 0.1em; min-width: 4.6rem; }
+  .foot-dim { opacity: 0.7; }
 </style>
 </head>
 <body>
@@ -202,7 +207,11 @@
   </section>
   <section id="history" class="history" aria-label="Plate history"></section>
 </main>
-<footer id="debug"></footer>
+<footer id="debug">
+  <div class="foot-row"><span class="foot-label">SYSTEM</span><span id="foot-system">—</span></div>
+  <div class="foot-row"><span class="foot-label">PIPELINE</span><span id="foot-pipeline">—</span></div>
+  <div class="foot-row foot-dim"><span class="foot-label">LINK</span><span id="foot-link"></span></div>
+</footer>
 <script>
 const STATS_HOLD_MS = 5000;
 const HISTORY_SLOTS = 10;
@@ -214,7 +223,9 @@ const page = {
   liveBoxes: document.getElementById("live-boxes"),
   liveMeta: document.getElementById("live-meta"),
   history: document.getElementById("history"),
-  debug: document.getElementById("debug"),
+  footSystem: document.getElementById("foot-system"),
+  footPipeline: document.getElementById("foot-pipeline"),
+  footLink: document.getElementById("foot-link"),
 };
 
 let liveToken = "";
@@ -230,6 +241,7 @@ document.getElementById("reset").addEventListener("click", (event) => {
 });
 
 let lastLive = null;
+let pipelineInfo = null;
 let lastHistory = [];
 let heldStats = null;
 let heldStatsUntil = 0;
@@ -285,7 +297,11 @@ function render(state) {
   const limit = Math.min(HISTORY_SLOTS, state.history_limit || HISTORY_SLOTS);
   renderHistory(lastHistory, limit);
   const frameId = state.latest ? state.latest.frame_id : "none";
-  page.debug.textContent = [
+  const info = state.system || {};
+  pipelineInfo = info.pipeline || null;
+  page.footSystem.textContent = systemText(info.system) || "waiting for the backend";
+  page.footPipeline.textContent = pipelineText(pipelineInfo) || "waiting for the backend";
+  page.footLink.textContent = [
     state.ok ? "api up" : "api down",
     state.api_socket || "",
     "frame " + frameId,
@@ -365,7 +381,8 @@ function formatStats(plate, latest, fps) {
   const ocrConf = minCharConfidence(plate) || finiteNumber(plate.confidence);
   const pos = numberPair(box.x, box.y);
   const size = sizePair(box.width, box.height);
-  const device = runtimeLabel(latest && latest.runtime);
+  const detDevice = stageDevice("detector");
+  const ocrDevice = stageDevice("ocr");
   const detMs = wholeMs(latest && latest.detector_ms);
   const ocrMs = wholeMs(latest && latest.reader_ms);
   const fpsText = Number.isFinite(fps) ? fps.toFixed(1) : "";
@@ -380,8 +397,8 @@ function formatStats(plate, latest, fps) {
   );
   blocks.push(
     "PERFORMANCE\n"
-    + "Det: " + (detMs || "—") + " |  " + device + "\n"
-    + "OCR: " + (ocrMs || "—") + " |  " + device + "\n"
+    + "Det: " + (detMs || "—") + " | " + detDevice + "\n"
+    + "OCR: " + (ocrMs || "—") + " | " + ocrDevice + "\n"
     + "FPS: " + (fpsText || "—"),
   );
   blocks.push(
@@ -392,14 +409,63 @@ function formatStats(plate, latest, fps) {
   return blocks.join("\n\n");
 }
 
-function runtimeLabel(value) {
-  if (value === "npu") {
-    return "NPU";
+function stageDevice(stage) {
+  const item = pipelineInfo && pipelineInfo[stage];
+  if (!item || !item.device) {
+    return "—";
   }
-  if (value === "cpu") {
-    return "CPU";
+  const label = String(item.device).toUpperCase();
+  const workers = Number(item.workers);
+  return Number.isFinite(workers) && workers > 1 ? label + " ×" + workers : label;
+}
+
+function percent(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.round(number) + "%" : "";
+}
+
+function gigabytes(megabytes) {
+  return (Number(megabytes) / 1024).toFixed(1);
+}
+
+function systemText(system) {
+  if (!system) {
+    return "";
   }
-  return "NPU/CPU";
+  const parts = [];
+  if (percent(system.cpu_percent)) {
+    const app = percent(system.app_cpu_percent);
+    parts.push("CPU " + percent(system.cpu_percent) + (app ? " (app " + app + ")" : ""));
+  }
+  if (Number.isFinite(Number(system.mem_used_mb)) && Number.isFinite(Number(system.mem_total_mb))) {
+    const app = Number.isFinite(Number(system.app_mem_mb)) ? " (app " + system.app_mem_mb + " MB)" : "";
+    parts.push("Memory " + gigabytes(system.mem_used_mb) + " of " + gigabytes(system.mem_total_mb) + " GB" + app);
+  }
+  if (percent(system.npu_busy_percent)) {
+    parts.push("NPU " + percent(system.npu_busy_percent) + " busy");
+  }
+  if (Number.isFinite(Number(system.temperature_c))) {
+    parts.push("SoC " + Math.round(Number(system.temperature_c)) + " °C");
+  }
+  return parts.join("  ·  ");
+}
+
+function pipelineText(info) {
+  if (!info) {
+    return "";
+  }
+  const parts = [];
+  for (const [stage, name] of [["detector", "Detector"], ["ocr", "OCR"]]) {
+    const item = info[stage];
+    if (!item) {
+      continue;
+    }
+    const workers = Number(item.workers);
+    const how = Number.isFinite(workers) && workers > 1 ? " · " + workers + " workers" : "";
+    const device = item.device ? String(item.device).toUpperCase() : "—";
+    parts.push(name + ": " + device + how + " · " + (item.model || ""));
+  }
+  return parts.join("  ·  ");
 }
 
 function minCharConfidence(plate) {
@@ -444,14 +510,6 @@ function wholeMs(value) {
     return "";
   }
   return Math.round(number) + "ms";
-}
-
-function milliseconds(value) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) {
-    return "";
-  }
-  return number.toFixed(1) + " ms";
 }
 
 function shortClock(value) {
@@ -586,14 +644,6 @@ function historyMeta(item) {
     "Det " + finiteNumber(box.confidence),
     "OCR " + minCharConfidence(item),
   ];
-  const detector = milliseconds(item.detector_ms);
-  const reader = milliseconds(item.reader_ms);
-  if (detector) {
-    parts.push(detector);
-  }
-  if (reader) {
-    parts.push(reader);
-  }
   return parts.join(" · ");
 }
 

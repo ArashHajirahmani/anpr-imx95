@@ -80,6 +80,7 @@ def run_streams(
     ]
     plate_reader = reader if reader is not None else _load_reader(config)
     if plate_reader is not None:
+        _register_system(results, config, plate_reader)
         publisher = ReadPublisher(
             results,
             ocr_floor(config.recognizer.min_confidence, config.service.runtime),
@@ -259,3 +260,20 @@ def _infer_loop(
             if reads is None or stats is None:
                 continue
             publisher.handle(name, frame, reads, stats)
+
+
+def _register_system(results: object, config: AppConfig, reader: object) -> None:
+    """Tell the result store what the pipeline runs on so the page shows facts, not guesses."""
+    set_system = getattr(results, "set_system", None)
+    if set_system is None:
+        return
+    from anpr.sysmon import SystemMonitor
+
+    describe = getattr(reader, "describe", None)
+    info: dict[str, object] = dict(describe()) if callable(describe) else {}
+    ocr = info.get("ocr")
+    if isinstance(ocr, dict):
+        ocr["workers"] = config.service.ocr_workers
+    info["runtime"] = config.service.runtime
+    meter = getattr(reader, "npu_meter", None) if info.get("npu_available") else None
+    set_system(info, SystemMonitor(meter).snapshot)

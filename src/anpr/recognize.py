@@ -27,6 +27,7 @@ from anpr.quality import (
     log_quality_reject,
 )
 from anpr.roi_refine import RoiRefineSettings, refine_plate_roi
+from anpr.sysmon import BusyMeter
 from anpr.types import Frame, PlateBox
 
 logger = logging.getLogger("anpr.recognize")
@@ -111,6 +112,11 @@ class PlateReader:
         self._enhancer = enhancer or EnhancerSettings()
         self._roi_refine = roi_refine or RoiRefineSettings.disabled()
         self._detector_backend = "onnx"
+        self._ocr_threads = max(1, int(ocr_threads))
+        # Time spent inside Neutron-delegated inference; only the tflite detector fills it.
+        self.npu_meter = BusyMeter()
+        self._detector_path = detector_path
+        self._ocr_path = ocr_path
         self._tflite = None
         self._detector = None
         self._detector_input = ""
@@ -218,7 +224,9 @@ class PlateReader:
                 quant = np.round(blob / self._detector_scale) + self._detector_zero_point
                 feed = np.clip(quant, -128, 127).astype(self._detector_input_dtype)
             self._tflite.set_tensor(self._detector_input_index, feed)
+            started = time.perf_counter()
             self._tflite.invoke()
+            self.npu_meter.add(time.perf_counter() - started)
             tensors = []
             for index, scale, zero_point in self._detector_outputs:
                 tensor = self._tflite.get_tensor(index)
@@ -232,6 +240,24 @@ class PlateReader:
     @property
     def runtime(self) -> str:
         return self._runtime
+
+    def describe(self) -> dict[str, object]:
+        """Where each stage really runs, for the web page."""
+        on_npu = self._detector_backend == "tflite"
+        return {
+            "detector": {
+                "device": "npu" if on_npu else "cpu",
+                "backend": self._detector_backend,
+                "model": self._detector_path.name,
+            },
+            "ocr": {
+                "device": "cpu",
+                "backend": "onnx",
+                "model": self._ocr_path.name,
+                "threads_per_worker": self._ocr_threads,
+            },
+            "npu_available": on_npu,
+        }
 
     def read(self, frame: Frame) -> tuple[list[PlateRead], InferenceStats]:
         """Detect and recognize on the calling thread (single-threaded path)."""

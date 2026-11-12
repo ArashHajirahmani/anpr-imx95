@@ -147,6 +147,13 @@ class ApiHandler(BaseHTTPRequestHandler):
         if path == "/v1/history":
             self._history()
             return
+        if path == "/v1/system":
+            payload = self.server.store.system()
+            if payload is None:
+                self._send(503, _JSON, _dump({"error": "no system info"}))
+            else:
+                self._send(200, _JSON, _dump(payload))
+            return
         match = _HISTORY_JPEG.match(path)
         if match is None:
             self._send(404, _JSON, _dump({"error": "not found"}))

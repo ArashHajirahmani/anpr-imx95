@@ -121,6 +121,22 @@ class ResultStore:
         self._slots: list[_PlateSlot] = []
         self._frame_times: deque[float] = deque()
         self._reset_listeners: list[Callable[[], None]] = []
+        self._pipeline: dict[str, object] = {}
+        self._monitor: Callable[[], dict[str, object]] | None = None
+
+    def set_system(
+        self,
+        pipeline: dict[str, object],
+        monitor: Callable[[], dict[str, object]],
+    ) -> None:
+        """Register what the pipeline runs on and a sampler for CPU, memory and NPU load."""
+        self._pipeline = pipeline
+        self._monitor = monitor
+
+    def system(self) -> dict[str, object] | None:
+        if self._monitor is None:
+            return None
+        return {"pipeline": self._pipeline, "system": self._monitor()}
 
     def on_reset(self, listener: Callable[[], None]) -> None:
         """Call ``listener`` after every ``reset`` (e.g. to clear the vote state)."""

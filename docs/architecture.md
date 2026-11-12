@@ -16,6 +16,37 @@ When `recognizer.enabled` is true, the staged pipeline above runs the plate dete
 
 After YOLO, `recognizer.roi_refine.expand` snaps only the left/right borders by searching from `inner_ratio` (default 20% inside) out to `outer_ratio` (default +20% outside) and locking onto the outermost strong plate-frame peak, then pads L/R by `pad_ratio` of width and T/B by `pad_ratio` of height (default 5%). Top/bottom are not edge-snapped. Optional `perspective` then warps a scored four-corner plate quad (also capped by `max_ratio`). Both steps are independently switchable. Then an image-quality gate can reject blurry, dark, bright, or low-contrast boxes before OCR (`recognizer.quality`). An optional experimental enhancer (`recognizer.enhancer`, on in the sample config) may CLAHE / gamma / sharpen the crop, but it still must feed CCT as 128×64 RGB NHWC uint8 with no Python normalization, and it does not override confidence rejection. Resize to that canvas uses `INTER_AREA` when the crop is larger than 128×64 and `INTER_LANCZOS4` when upscaling. OCR decoding is CTC-greedy (drop blank `_`, collapse repeated non-blanks, keep max score per run). CCT ONNX steps are already probabilities; decode uses them directly and only softmaxes when a step looks like raw logits. Plate confidence is the minimum collapsed character score and is what the UI shows. Reads go through temporal evidence fusion (`src/anpr/fusion.py`, `ctc.py`, `vote.py`). Each OCR pass keeps its CTC step probabilities (`PlateRead.step_probs`). Per track (matched by box IoU), a pool of candidate texts (CTC prefix beam of every frame plus the greedy read, at most `recognizer.vote.max_pool`) is scored against each of the last `window` frames with the CTC forward likelihood, so truncated or substituted reads cost a candidate evidence instead of casting a lost vote, and length differences need no alignment. Per-frame log-likelihood is floored at `null_logp`, a fixed "unknown" hypothesis competes in the posterior, and summed evidence is scaled by `evidence_weight` because consecutive frames are correlated. Frame weight is `1 / (1 + quality_slope × mean step entropy)`, so crops the OCR is unsure about count less. The leader is released as soon as its posterior reaches `release_posterior`, with no fixed number of frames; the released read carries the fused text and the posterior as its confidence. A crisp contradicting frame withholds the release instead of flipping it. Reads without probabilities fall back to an exact-text vote with confidence² weights. On the bench clip (INT8 OCR) this removed all single-frame flips that the earlier exact-text vote published; see the commit for numbers. Crop sharpness and contrast metrics are not used as vote weights. History keeps up to `service.history_limit` distinct plate slots (10 in the sample). Partial OCR forms of the same plate (prefix/suffix, one-char drop, near-duplicate) update the matching slot with the best text and best crop, matching against each slot’s last 10 aliases. The npu path subtracts 0.005 from confidence floors.
 
+## Models
+
+Two independent pretrained models joined only by a crop. Neither is trained in this repo; `tools/host/` converts and quantizes them. The full walkthrough (graph analysis, op counts, XS vs S, NPU mapping) is in [learning-guide.md](learning-guide.md#6b-model-architecture-deep-dive-detector-ocr-xs-ocr-s).
+
+```mermaid
+flowchart LR
+  F["BGR frame"] --> LB["letterbox 640x640"]
+  LB --> DET["detector YOLOv9-t INT8 (NPU)"]
+  DET --> DEC["decode_dfl_head (numpy)"]
+  DEC --> BX["boxes"]
+  BX --> RF["ROI refine + resize 128x64"]
+  RF --> OCR["OCR CCT-S or CCT-XS (CPU, or XS on NPU)"]
+  OCR --> SL["10 slots x 37 probabilities"]
+  SL --> FUS["decode, gates, multi-frame fusion"]
+```
+
+| | Detector | OCR CCT-XS | OCR CCT-S |
+| --- | --- | --- | --- |
+| Source | open-image-models YOLOv9-t 640 | fast-plate-ocr `cct_xs_v2_global` | fast-plate-ocr `cct_s_v2_global` |
+| Parameters | 3.05 M | 0.79 M | 1.26 M |
+| Input | `[1,3,640,640]` float RGB NCHW | `[N,64,128,3]` uint8 RGB NHWC | same |
+| Output | `[1,5,8400]` (cx, cy, w, h, score); the NPU build ends at `box_dfl [1,64,N]` + `scores` | `plate [N,10,37]` + `region [N,66]` | same |
+| Core | Conv + SiLU, GELAN blocks, FPN/PAN neck, 3 strides, DFL box head | conv stem, 3 self-attention blocks over 65 tokens | conv stem, 5 self-attention blocks over 512 tokens |
+| Board time | about 43 ms (NPU) | about 40 ms (NPU) / 73 ms (CPU INT8) | about 295 ms (CPU) |
+
+Detector: backbone and neck are Conv-heavy and run as `NeutronGraph` on the NPU. The box branch is exported as 64 raw DFL logits (4 sides x 16 bins) and the class branch as a separate score tensor, so each keeps its own INT8 scale; the softmax-over-bins decode runs in numpy only for anchors above `detector.conf_threshold`.
+
+OCR (both sizes): conv stem, patch embedding, positional embedding, self-attention blocks with Dynamic-Tanh normalization, then a token reducer with 10 learned queries (one per character slot), 3 small transformer blocks over those 10 tokens, and two heads: `plate` (10 slots, softmax over `0-9A-Z_`, `_` is right padding) and `region` (66 regions, ignored by the application). The output is a slot classification, not a CTC alignment; `decode_characters` and `ctc.py` apply CTC-style logic (drop `_`, merge adjacent identical characters) on top of it. XS looks at about 8x fewer tokens than S (65 vs 512), so attention is far cheaper (and the leading glyph of small plates is lost more often). Attention matmuls, softmax and residual adds stay on the CPU even in the Neutron build.
+
+Open question: merging adjacent identical characters would turn a real double character (for example `AA12`) into one. The bench plate has none, so this has not been exercised on hardware.
+
 ## Result API and web client
 
 `anpr run` stores the latest JPEG and the plates found on that frame. Accepted plates update a sticky history of `service.history_limit` distinct slots (10 in the sample). The image stays binary. Metadata is JSON. Both are HTTP resources on the Unix socket `service.api_socket` (`/run/anpr/api.sock`). The recognition process does not listen on TCP.

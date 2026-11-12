@@ -132,3 +132,40 @@ def test_vote_section_defaults_and_validation(tmp_path) -> None:
     path.write_text(json.dumps(sample))
     with pytest.raises(ConfigError):
         load_config(path)
+
+
+def _with_recognizer(tmp_path: Path, **changes: object) -> Path:
+    payload = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    payload["recognizer"].update(changes)
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_recognizer_model_profile_selects_paths(tmp_path: Path) -> None:
+    config = load_config(EXAMPLE)
+    assert config.recognizer.model == "s"
+    path = _with_recognizer(tmp_path, model="xs_npu")
+    recognizer = load_config(path).recognizer
+    assert recognizer.model == "xs_npu"
+    assert recognizer.path.endswith("cct_xs_v2_global.onnx")
+    assert recognizer.npu_path.endswith("cct_xs_v2_global.neutron.tflite")
+
+
+def test_recognizer_unknown_model_profile_is_rejected(tmp_path: Path) -> None:
+    path = _with_recognizer(tmp_path, model="xxl")
+    with pytest.raises(ConfigError, match="not a key of recognizer.models"):
+        load_config(path)
+
+
+def test_recognizer_plain_paths_still_work(tmp_path: Path) -> None:
+    payload = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    recognizer = payload["recognizer"]
+    recognizer.pop("model")
+    recognizer.pop("models")
+    recognizer["path"] = "/m/a.onnx"
+    recognizer["npu_path"] = "/m/a.tflite"
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    loaded = load_config(path).recognizer
+    assert (loaded.model, loaded.path, loaded.npu_path) == ("", "/m/a.onnx", "/m/a.tflite")

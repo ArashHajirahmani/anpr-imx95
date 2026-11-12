@@ -2,10 +2,13 @@
 
 `cpu` uses float ONNX models on ORT CPU.
 `npu` uses a Neutron-compiled TFLite detector (`*.tflite`) via
-`libneutron_delegate.so`, and INT8 ONNX OCR on ORT CPU.
+`libneutron_delegate.so`. The OCR model follows its file type: an `.onnx` file runs on ORT
+CPU, a Neutron-compiled `.tflite` file runs through the same delegate (the conv stem and the
+linear layers on the NPU, attention softmax on the CPU). Swap models by changing the config.
 """
 
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -83,6 +86,16 @@ class InferenceStats:
     rss_mb: float
 
 
+def _resolve_delegate(delegate_path: Path | None) -> Path:
+    path = delegate_path
+    if path is None or not path.is_file():
+        probe = probe_delegates()
+        path = probe.selected or DEFAULT_NEUTRON_DELEGATE
+    if not path.is_file():
+        raise FileNotFoundError(f"Neutron TFLite delegate not found: {path}")
+    return path
+
+
 class PlateReader:
     def __init__(
         self,
@@ -96,6 +109,7 @@ class PlateReader:
         roi_refine: RoiRefineSettings | None = None,
         delegate_path: Path | None = None,
         ocr_threads: int = 2,
+        ocr_delegate_path: Path | None = None,
     ) -> None:
         import onnxruntime as ort
 
@@ -148,34 +162,99 @@ class PlateReader:
                 providers=providers,
             )
             self._detector_input = self._detector.get_inputs()[0].name
-        # InferenceSession.run is thread-safe: staged OCR workers share this session,
-        # each run using `ocr_threads` intra-op threads (1 when several workers run).
-        ocr_options = ort.SessionOptions()
-        ocr_options.intra_op_num_threads = max(1, int(ocr_threads))
-        self._ocr = ort.InferenceSession(
-            str(ocr_path),
-            sess_options=ocr_options,
-            providers=ocr_providers,
-        )
-        self._ocr_input = self._ocr.get_inputs()[0].name
+        self._ocr_backend = "onnx"
+        self._ocr_tflite = None
+        self._ocr_lock = threading.Lock()
+        self._ocr_session = None
+        if ocr_path.suffix.lower() == ".tflite":
+            if runtime != "npu":
+                raise ValueError("a .tflite OCR model needs service.runtime=npu")
+            self._ocr_backend = "tflite"
+            self._load_tflite_ocr(ocr_path, ocr_delegate_path or delegate_path)
+        else:
+            # InferenceSession.run is thread-safe: staged OCR workers share this session,
+            # each run using `ocr_threads` intra-op threads (1 when several workers run).
+            ocr_options = ort.SessionOptions()
+            ocr_options.intra_op_num_threads = max(1, int(ocr_threads))
+            self._ocr_session = ort.InferenceSession(
+                str(ocr_path),
+                sess_options=ocr_options,
+                providers=ocr_providers,
+            )
+            self._ocr_input = self._ocr_session.get_inputs()[0].name
         logger.info(
-            "plate reader runtime=%s detector_backend=%s detector=%s ocr=%s",
+            "plate reader runtime=%s detector_backend=%s ocr_backend=%s detector=%s ocr=%s",
             runtime,
             self._detector_backend,
+            self._ocr_backend,
             detector_path,
             ocr_path,
         )
+
+    def _load_tflite_ocr(self, ocr_path: Path, delegate_path: Path | None) -> None:
+        from tflite_runtime.interpreter import Interpreter, load_delegate
+
+        path = _resolve_delegate(delegate_path)
+        interpreter = Interpreter(
+            model_path=str(ocr_path),
+            experimental_delegates=[load_delegate(str(path))],
+        )
+        interpreter.allocate_tensors()
+        inp = interpreter.get_input_details()[0]
+        outputs = [out for out in interpreter.get_output_details() if len(out["shape"]) == 3]
+        if len(outputs) != 1:
+            raise ValueError(f"OCR model needs one [1, slots, classes] output, got {len(outputs)}")
+        scale, zero_point = outputs[0].get("quantization", (0.0, 0))
+        self._ocr_tflite = interpreter
+        self._ocr_input_index = int(inp["index"])
+        self._ocr_input_dtype = inp["dtype"]
+        in_scale, in_zero_point = inp.get("quantization", (0.0, 0))
+        self._ocr_input_scale = float(in_scale) if in_scale else 0.0
+        self._ocr_input_zero_point = int(in_zero_point)
+        self._ocr_output_index = int(outputs[0]["index"])
+        self._ocr_output_dtype = outputs[0]["dtype"]
+        self._ocr_output_scale = float(scale) if scale else 1.0
+        self._ocr_output_zero_point = int(zero_point)
+        logger.info("tflite neutron ocr delegate=%s model=%s", path, ocr_path.name)
+
+    def _ocr_feed(self, batch: object) -> object:
+        """Convert a uint8 NHWC crop to the OCR model's input tensor."""
+        import numpy as np
+
+        if self._ocr_input_dtype == np.int8 and self._ocr_input_scale:
+            if self._ocr_input_scale == 1.0 and self._ocr_input_zero_point == -128:
+                return np.bitwise_xor(batch, 128).view(np.int8)  # pixel - 128
+            quant = np.round(batch / self._ocr_input_scale) + self._ocr_input_zero_point
+            return np.clip(quant, -128, 127).astype(np.int8)
+        return batch.astype(self._ocr_input_dtype)
+
+    def _ocr_logits(self, batch: object) -> object:
+        """Run one OCR batch and return the [slots, classes] character probabilities."""
+        import numpy as np
+
+        if self._ocr_backend == "tflite":
+            assert self._ocr_tflite is not None
+            with self._ocr_lock:
+                self._ocr_tflite.set_tensor(
+                    self._ocr_input_index, batch.astype(self._ocr_input_dtype)
+                )
+                started = time.perf_counter()
+                self._ocr_tflite.invoke()
+                self.npu_meter.add(time.perf_counter() - started)
+                out = self._ocr_tflite.get_tensor(self._ocr_output_index)[0]
+            if out.dtype != np.float32:
+                out = (
+                    out.astype(np.float32) - self._ocr_output_zero_point
+                ) * self._ocr_output_scale
+            return out
+        assert self._ocr_session is not None
+        return self._ocr_session.run(None, {self._ocr_input: batch})[0][0]
 
     def _load_tflite_detector(self, detector_path: Path, delegate_path: Path | None) -> None:
         import numpy as np
         from tflite_runtime.interpreter import Interpreter, load_delegate
 
-        path = delegate_path
-        if path is None or not path.is_file():
-            probe = probe_delegates()
-            path = probe.selected or DEFAULT_NEUTRON_DELEGATE
-        if not path.is_file():
-            raise FileNotFoundError(f"Neutron TFLite delegate not found: {path}")
+        path = _resolve_delegate(delegate_path)
         delegate = load_delegate(str(path))
         interpreter = Interpreter(
             model_path=str(detector_path),
@@ -244,6 +323,7 @@ class PlateReader:
     def describe(self) -> dict[str, object]:
         """Where each stage really runs, for the web page."""
         on_npu = self._detector_backend == "tflite"
+        ocr_on_npu = self._ocr_backend == "tflite"
         return {
             "detector": {
                 "device": "npu" if on_npu else "cpu",
@@ -251,12 +331,14 @@ class PlateReader:
                 "model": self._detector_path.name,
             },
             "ocr": {
-                "device": "cpu",
-                "backend": "onnx",
+                "device": "npu" if ocr_on_npu else "cpu",
+                "backend": self._ocr_backend,
                 "model": self._ocr_path.name,
                 "threads_per_worker": self._ocr_threads,
+                # Conv stem and linear layers run on the NPU; attention softmax stays on CPU.
+                "detail": "NPU conv + linear, CPU attention" if ocr_on_npu else "",
             },
-            "npu_available": on_npu,
+            "npu_available": on_npu or ocr_on_npu,
         }
 
     def read(self, frame: Frame) -> tuple[list[PlateRead], InferenceStats]:
@@ -384,7 +466,7 @@ class PlateReader:
         rgb = cv2.cvtColor(prepared_bgr, cv2.COLOR_BGR2RGB)
         resized = resize_rgb_for_ocr(rgb)
         batch = np.ascontiguousarray(resized[None, ...])
-        logits = self._ocr.run(None, {self._ocr_input: batch})[0][0]
+        logits = self._ocr_logits(batch)
         steps = logits.tolist()
         decoded = decode_characters(steps, self._alphabet)
         probs = tuple(tuple(round(p, 5) for p in row) for row in step_probabilities(steps))

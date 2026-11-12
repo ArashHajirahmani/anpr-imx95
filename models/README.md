@@ -14,6 +14,7 @@ regenerated on the host, then copied to `/opt/anpr/models` on the board.
 | `cct_s_v2_global.int8.onnx` | INT8 OCR (ORT CPU under npu) | Local quantize |
 | `cct_xs_v2_global.onnx` | Optional faster float OCR | fast-plate-ocr CCT-XS v2 global |
 | `cct_xs_v2_global.int8.onnx` | Optional faster INT8 OCR | Local quantize |
+| `cct_xs_v2_global.neutron.tflite` | XS OCR on the NPU (`xs_npu` profile) | `tools/host/convert_neutron_ocr.py` |
 | `*_plate_config.yaml` | OCR charset / size metadata | Same release as the matching OCR ONNX |
 
 ## Download float weights

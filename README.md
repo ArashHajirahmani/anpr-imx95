@@ -81,3 +81,7 @@ tools/host/run-rtsp-server.sh datasets/videos/IMG_9475.mp4
 ```
 
 MediaMTX is not in git. Put the executable at `tools/host/mediamtx`, next to `tools/host/run-rtsp-server.sh`. The other release files (`mediamtx.yml`, `LICENSE`, `auto.crt`, `auto.key`) can stay in that directory; they are gitignored. `MEDIAMTX_BIN` or a `mediamtx` binary on `PATH` also works. The script prints the board URL from this PC's current address. Video tracks must be H.264. Phone `.MOV` files are often HEVC; convert before dropping them in `datasets/videos`.
+
+## Switching models
+
+`recognizer.models` (and `detector.models`) name the available model files; `recognizer.model` picks the active one. Each entry has `path` (used with `service.runtime=cpu`) and `npu_path` (used with `runtime=npu`). The backend follows the file type under `npu`: `.onnx` runs on ORT CPU, a Neutron `.tflite` runs on the NPU. Change `"model": "s"` to `"xs"` or `"xs_npu"` in `/etc/anpr/config.json` and run `systemctl restart anpr`. The page footer shows the device each stage runs on and the active profile.

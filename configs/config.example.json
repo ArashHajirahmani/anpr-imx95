@@ -25,8 +25,21 @@
   },
   "recognizer": {
     "enabled": true,
-    "path": "/opt/anpr/models/cct_s_v2_global.onnx",
-    "npu_path": "/opt/anpr/models/cct_s_v2_global.int8.onnx",
+    "model": "s",
+    "models": {
+      "s": {
+        "path": "/opt/anpr/models/cct_s_v2_global.onnx",
+        "npu_path": "/opt/anpr/models/cct_s_v2_global.int8.onnx"
+      },
+      "xs": {
+        "path": "/opt/anpr/models/cct_xs_v2_global.onnx",
+        "npu_path": "/opt/anpr/models/cct_xs_v2_global.int8.onnx"
+      },
+      "xs_npu": {
+        "path": "/opt/anpr/models/cct_xs_v2_global.onnx",
+        "npu_path": "/opt/anpr/models/cct_xs_v2_global.neutron.tflite"
+      }
+    },
     "delegate_path": "",
     "charset": "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_",
     "min_confidence": 0.70,

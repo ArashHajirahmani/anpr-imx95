@@ -463,7 +463,8 @@ function pipelineText(info) {
     const workers = Number(item.workers);
     const how = Number.isFinite(workers) && workers > 1 ? " · " + workers + " workers" : "";
     const device = item.device ? String(item.device).toUpperCase() : "—";
-    parts.push(name + ": " + device + how + " · " + (item.model || ""));
+    const detail = item.detail ? " (" + item.detail + ")" : "";
+    parts.push(name + ": " + device + detail + how + " · " + (item.model || ""));
   }
   return parts.join("  ·  ");
 }

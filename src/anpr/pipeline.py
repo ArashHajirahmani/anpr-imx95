@@ -206,6 +206,7 @@ def _load_reader(config: AppConfig) -> object | None:
         from anpr.recognize import PlateReader
 
         delegate = config.detector.delegate_path.strip()
+        ocr_delegate = config.recognizer.delegate_path.strip()
         return PlateReader(
             detector_path=Path(detector_path),
             ocr_path=Path(ocr_path),
@@ -217,6 +218,7 @@ def _load_reader(config: AppConfig) -> object | None:
             roi_refine=config.recognizer.roi_refine,
             delegate_path=Path(delegate) if delegate else None,
             ocr_threads=1 if config.service.ocr_workers > 1 else 2,
+            ocr_delegate_path=Path(ocr_delegate) if ocr_delegate else None,
         )
     except Exception:
         logger.exception("plate reader failed to load")
@@ -274,6 +276,10 @@ def _register_system(results: object, config: AppConfig, reader: object) -> None
     ocr = info.get("ocr")
     if isinstance(ocr, dict):
         ocr["workers"] = config.service.ocr_workers
+        ocr["profile"] = config.recognizer.model
+    detector = info.get("detector")
+    if isinstance(detector, dict):
+        detector["profile"] = config.detector.model
     info["runtime"] = config.service.runtime
     meter = getattr(reader, "npu_meter", None) if info.get("npu_available") else None
     set_system(info, SystemMonitor(meter).snapshot)

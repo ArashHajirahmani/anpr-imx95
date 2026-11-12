@@ -33,6 +33,7 @@ class DetectorConfig:
     conf_threshold: float
     input_width: int
     input_height: int
+    model: str = ""
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ class RecognizerConfig:
     enhancer: EnhancerSettings
     roi_refine: RoiRefineSettings
     vote: FusionSettings = FusionSettings()
+    model: str = ""
 
 
 @dataclass(frozen=True)
@@ -129,13 +131,41 @@ def _detector(payload: dict[str, object]) -> DetectorConfig:
         raise ConfigError("detector.conf_threshold must be a number")
     if not 0.0 <= float(threshold) <= 1.0:
         raise ConfigError("detector.conf_threshold must be between 0 and 1")
+    name, path, npu_path = _model_paths(body, "detector")
     return DetectorConfig(
-        path=_string(body.get("path"), "detector.path"),
-        npu_path=_string(body.get("npu_path", ""), "detector.npu_path"),
+        path=path,
+        npu_path=npu_path,
+        model=name,
         delegate_path=_string(body.get("delegate_path"), "detector.delegate_path"),
         conf_threshold=float(threshold),
         input_width=_positive_int(body.get("input_width"), "detector.input_width"),
         input_height=_positive_int(body.get("input_height"), "detector.input_height"),
+    )
+
+
+def _model_paths(body: dict[str, object], label: str) -> tuple[str, str, str]:
+    """Pick the model files: a named entry of ``models`` when ``model`` is set, else the
+    top-level ``path`` / ``npu_path``. Returns ``(name, path, npu_path)``.
+
+    Switching a model is one edit: change ``model`` to another key of ``models``.
+    """
+    models = body.get("models")
+    selected = body.get("model", "")
+    if models is None and not selected:
+        return (
+            "",
+            _string(body.get("path"), f"{label}.path"),
+            _string(body.get("npu_path", ""), f"{label}.npu_path"),
+        )
+    registry = _object(models, f"{label}.models")
+    name = _nonempty(selected, f"{label}.model")
+    if name not in registry:
+        raise ConfigError(f"{label}.model {name!r} is not a key of {label}.models")
+    entry = _object(registry[name], f"{label}.models.{name}")
+    return (
+        name,
+        _string(entry.get("path", ""), f"{label}.models.{name}.path"),
+        _string(entry.get("npu_path", ""), f"{label}.models.{name}.npu_path"),
     )
 
 
@@ -146,10 +176,12 @@ def _recognizer(payload: dict[str, object]) -> RecognizerConfig:
         body.get("min_char_confidence", minimum),
         "recognizer.min_char_confidence",
     )
+    name, path, npu_path = _model_paths(body, "recognizer")
     return RecognizerConfig(
         enabled=_bool(body.get("enabled"), "recognizer.enabled"),
-        path=_string(body.get("path"), "recognizer.path"),
-        npu_path=_string(body.get("npu_path", ""), "recognizer.npu_path"),
+        path=path,
+        npu_path=npu_path,
+        model=name,
         delegate_path=_string(body.get("delegate_path"), "recognizer.delegate_path"),
         charset=_string(body.get("charset"), "recognizer.charset"),
         min_confidence=minimum,

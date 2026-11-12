@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from anpr.fusion import FusionSettings
 from anpr.quality import EnhancerSettings, QualitySettings
 from anpr.roi_refine import ExpandSettings, PerspectiveSettings, RoiRefineSettings
 
@@ -46,6 +47,7 @@ class RecognizerConfig:
     quality: QualitySettings
     enhancer: EnhancerSettings
     roi_refine: RoiRefineSettings
+    vote: FusionSettings = FusionSettings()
 
 
 @dataclass(frozen=True)
@@ -155,6 +157,38 @@ def _recognizer(payload: dict[str, object]) -> RecognizerConfig:
         quality=_quality(body.get("quality")),
         enhancer=_enhancer(body.get("enhancer")),
         roi_refine=_roi_refine(body.get("roi_refine")),
+        vote=_vote(body.get("vote")),
+    )
+
+
+def _vote(raw: object) -> FusionSettings:
+    if raw is None:
+        return FusionSettings()
+    body = _object(raw, "recognizer.vote")
+    default = FusionSettings()
+    null_logp = body.get("null_logp", default.null_logp)
+    if isinstance(null_logp, bool) or not isinstance(null_logp, int | float) or null_logp >= 0:
+        raise ConfigError("recognizer.vote.null_logp must be a negative number")
+    release = _unit_float(
+        body.get("release_posterior", default.release_posterior),
+        "recognizer.vote.release_posterior",
+    )
+    if release <= 0.5:
+        raise ConfigError("recognizer.vote.release_posterior must be above 0.5")
+    return FusionSettings(
+        window=_positive_int(body.get("window", default.window), "recognizer.vote.window"),
+        beam=_positive_int(body.get("beam", default.beam), "recognizer.vote.beam"),
+        max_pool=_positive_int(body.get("max_pool", default.max_pool), "recognizer.vote.max_pool"),
+        evidence_weight=_non_negative(
+            body.get("evidence_weight", default.evidence_weight),
+            "recognizer.vote.evidence_weight",
+        ),
+        null_logp=float(null_logp),
+        release_posterior=release,
+        quality_slope=_non_negative(
+            body.get("quality_slope", default.quality_slope),
+            "recognizer.vote.quality_slope",
+        ),
     )
 
 

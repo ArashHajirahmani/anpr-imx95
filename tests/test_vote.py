@@ -1,3 +1,8 @@
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
 from anpr.recognize import PlateRead
 from anpr.types import PlateBox
 from anpr.vote import PlateVoteTracker
@@ -96,3 +101,62 @@ def test_stream_sticky_survives_box_jump() -> None:
     assert tracker.consider("cam", _read("AMW568", 0.99, x=400)) is None
     out = tracker.consider("cam", _read("AKW568", 0.9, x=400))
     assert out is not None and out.text == "AKW568"
+
+
+def _fused_read(text: str, x: int = 10, sure: float = 0.999) -> PlateRead:
+    from test_fusion import ALPHABET, _frame
+
+    steps = tuple(tuple(step) for step in _frame(text, sure=sure))
+    assert len(ALPHABET) == 37
+    base = _read(text, 0.9, x=x)
+    from dataclasses import replace
+
+    return replace(base, step_probs=steps)
+
+
+def test_fusion_releases_fast_and_ignores_a_garbage_frame() -> None:
+    from anpr.fusion import FusionSettings
+
+    tracker = PlateVoteTracker(FusionSettings())
+    assert tracker.consider("cam", _fused_read("CAKW568")) is None  # one frame is not enough
+    out = tracker.consider("cam", _fused_read("CAKW568"))
+    assert out is not None and out.text == "CAKW568"
+    tracker.consider("cam", _fused_read("CAKW568"))
+    tracker.consider("cam", _fused_read("CAKW568"))
+    # An uncertain truncated frame is reported as the fused plate, not as itself.
+    out = tracker.consider("cam", _fused_read("AKW58", sure=0.6))
+    assert out is not None and out.text == "CAKW568"
+    assert out.confidence >= 0.9
+
+
+def test_fusion_crisp_contradiction_withholds_instead_of_flipping() -> None:
+    from anpr.fusion import FusionSettings
+
+    tracker = PlateVoteTracker(FusionSettings())
+    for _ in range(2):
+        tracker.consider("cam", _fused_read("CAKW568"))
+    assert tracker.consider("cam", _fused_read("AKW58")) is None
+    for _ in range(3):
+        out = tracker.consider("cam", _fused_read("CAKW568"))
+    assert out is not None and out.text == "CAKW568"
+
+
+def test_fusion_falls_back_to_text_vote_without_probabilities() -> None:
+    from anpr.fusion import FusionSettings
+
+    tracker = PlateVoteTracker(FusionSettings())
+    assert tracker.consider("cam", _read("AKW568", 0.95)) is None
+    out = tracker.consider("cam", _read("AKW568", 0.96))
+    assert out is not None and out.text == "AKW568"
+
+
+def test_publisher_reset_drops_vote_tracks() -> None:
+    from anpr.publisher import ReadPublisher
+    from anpr.results import ResultStore
+
+    store = ResultStore(4)
+    publisher = ReadPublisher(store, 0.5, 0.5, 80)
+    publisher._voter.consider("cam", _read("AKW568", 0.95))
+    assert publisher._voter._tracks
+    store.reset()
+    assert not publisher._voter._tracks

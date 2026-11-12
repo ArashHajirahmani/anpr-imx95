@@ -31,6 +31,15 @@
     "charset": "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_",
     "min_confidence": 0.70,
     "min_char_confidence": 0.70,
+    "vote": {
+      "window": 16,
+      "beam": 5,
+      "max_pool": 10,
+      "evidence_weight": 0.3,
+      "null_logp": -8.0,
+      "release_posterior": 0.9,
+      "quality_slope": 4.0
+    },
     "quality": {
       "enabled": true,
       "min_laplacian_var": 40,

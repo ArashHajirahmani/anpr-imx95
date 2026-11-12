@@ -9,6 +9,7 @@ import logging
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 
@@ -119,6 +120,19 @@ class ResultStore:
         self._latest: LatestView | None = None
         self._slots: list[_PlateSlot] = []
         self._frame_times: deque[float] = deque()
+        self._reset_listeners: list[Callable[[], None]] = []
+
+    def on_reset(self, listener: Callable[[], None]) -> None:
+        """Call ``listener`` after every ``reset`` (e.g. to clear the vote state)."""
+        self._reset_listeners.append(listener)
+
+    def reset(self) -> None:
+        """Forget the plate history and let listeners drop their memory. Frames keep flowing."""
+        with self._lock:
+            self._slots.clear()
+            self._frame_id += 1
+        for listener in list(self._reset_listeners):
+            listener()
 
     @property
     def history_limit(self) -> int:

@@ -1,4 +1,10 @@
-"""Temporal plate voting: windowed, confidence-weighted exact-text consensus.
+"""Temporal plate voting.
+
+When a read carries its CTC step probabilities the tracker fuses evidence per track
+(``anpr.fusion``): every frame scores a pool of candidate texts and the posterior
+decides the release. Reads without probabilities use the exact-text consensus below.
+
+Exact-text consensus: windowed, confidence-weighted.
 
 Every read in a short per-track window votes for its exact text with weight
 ``confidence**2`` (down-weighted when a character margin or the blank mass says
@@ -12,8 +18,11 @@ single-frame flips (K to M, extra prefix) never reach the UI.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
+from anpr.ctc import mean_step_entropy
+from anpr.fusion import FusionSettings, FusionState
+from anpr.plates import PLATE_ALPHABET
 from anpr.recognize import PlateRead
 from anpr.types import PlateBox
 
@@ -41,14 +50,69 @@ class _Track:
     sticky: str = ""
 
 
+@dataclass
+class _FusionTrack:
+    state: FusionState
+    box: PlateBox
+
+
 class PlateVoteTracker:
     """Per-stream tracks that fuse OCR reads across time."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        fusion: FusionSettings | None = None,
+        alphabet: str = PLATE_ALPHABET,
+    ) -> None:
         self._tracks: dict[str, list[_Track]] = {}
         self._stream_sticky: dict[str, str] = {}
+        self._fusion = fusion
+        self._alphabet = alphabet
+        self._fusion_tracks: dict[str, list[_FusionTrack]] = {}
 
     def consider(self, stream: str, read: PlateRead) -> PlateRead | None:
+        if self._fusion is not None and read.step_probs:
+            return self._consider_fusion(stream, read, self._fusion)
+        return self._consider_text(stream, read)
+
+    def _consider_fusion(
+        self, stream: str, read: PlateRead, settings: FusionSettings
+    ) -> PlateRead | None:
+        track = self._match_fusion(stream, read.box, settings)
+        probs = [list(step) for step in read.step_probs]
+        weight = 1.0 / (1.0 + settings.quality_slope * mean_step_entropy(probs))
+        track.state.add(probs, weight, (read.text,))
+        track.box = read.box
+        text, posterior = track.state.leader()
+        if not text or posterior < settings.release_posterior:
+            return None
+        return replace(
+            read,
+            text=text,
+            confidence=posterior,
+            char_confidences=tuple(posterior for _ in text),
+            char_margins=(),
+            blank_uncertainty=0.0,
+        )
+
+    def _match_fusion(self, stream: str, box: PlateBox, settings: FusionSettings) -> _FusionTrack:
+        tracks = self._fusion_tracks.setdefault(stream, [])
+        best: _FusionTrack | None = None
+        best_iou = 0.0
+        for track in tracks:
+            iou = _box_iou(track.box, box)
+            if iou > best_iou:
+                best_iou = iou
+                best = track
+        if best is not None and best_iou >= IOU_MATCH:
+            return best
+        track = _FusionTrack(state=FusionState(settings, self._alphabet), box=box)
+        tracks.append(track)
+        if len(tracks) > 16:
+            del tracks[:-16]
+        return track
+
+    def _consider_text(self, stream: str, read: PlateRead) -> PlateRead | None:
         track = self._match(stream, read.box)
         if not track.sticky:
             track.sticky = self._stream_sticky.get(stream, "")

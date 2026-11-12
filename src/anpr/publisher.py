@@ -5,7 +5,10 @@ frames in capture order, so voting state, history, and the UI see the same seque
 """
 
 import logging
+import threading
 
+from anpr.fusion import FusionSettings
+from anpr.plates import PLATE_ALPHABET
 from anpr.results import FrameTiming, ResultStore, publish_reads
 from anpr.types import Frame
 from anpr.vote import PlateVoteTracker
@@ -35,17 +38,35 @@ class ReadPublisher:
         min_confidence: float,
         min_char_confidence: float,
         jpeg_quality: int,
+        vote: FusionSettings | None = None,
+        alphabet: str = PLATE_ALPHABET,
     ) -> None:
         self._results = results
         self._min_confidence = min_confidence
         self._min_char_confidence = min_char_confidence
         self._jpeg_quality = jpeg_quality
         self._last_texts: dict[str, set[str]] = {}
-        self._voter = PlateVoteTracker()
+        self._vote = vote
+        self._alphabet = alphabet
+        self._lock = threading.Lock()
+        self._voter = PlateVoteTracker(vote, alphabet)
+        if results is not None:
+            results.on_reset(self.reset)
         # Admit weak OCR into the vote buffer; high-trust / majority decide release.
         self._admit_floor = min(0.05, float(min_confidence), float(min_char_confidence))
 
+    def reset(self) -> None:
+        """Drop the temporal vote tracks and the last-text table."""
+        with self._lock:
+            self._voter = PlateVoteTracker(self._vote, self._alphabet)
+            self._last_texts.clear()
+        logger.info("vote state reset")
+
     def handle(self, name: str, frame: Frame, reads: list[object], stats: object) -> None:
+        with self._lock:
+            self._handle(name, frame, reads, stats)
+
+    def _handle(self, name: str, frame: Frame, reads: list[object], stats: object) -> None:
         min_char_confidence = self._min_char_confidence
         released: list[object] = []
         for read in reads:

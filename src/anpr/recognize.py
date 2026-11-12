@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from anpr.ctc import step_probabilities
 from anpr.infer import probe_delegates
 from anpr.plates import (
     PLATE_ALPHABET,
@@ -49,6 +50,8 @@ class PlateRead:
     pre_ocr_bgr: bytes | None = None
     pre_ocr_width: int = 0
     pre_ocr_height: int = 0
+    # CTC step probabilities of the OCR pass (steps x classes) for evidence fusion.
+    step_probs: tuple[tuple[float, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -296,9 +299,14 @@ class PlateReader:
             if not ok:
                 # Soft gate: keep OCR, attach metrics for vote weighting.
                 log_quality_reject(frame.stream_name, reason, metrics)
-            text, ocr_confidence, char_confidences, char_margins, blank_uncertainty = (
-                self._ocr_crop(prepared)
-            )
+            (
+                text,
+                ocr_confidence,
+                char_confidences,
+                char_margins,
+                blank_uncertainty,
+                step_probs,
+            ) = self._ocr_crop(prepared)
             if not text:
                 continue
             pre = np.ascontiguousarray(prepared)
@@ -332,6 +340,7 @@ class PlateReader:
                     pre_ocr_bgr=pre.tobytes(),
                     pre_ocr_width=int(pre.shape[1]),
                     pre_ocr_height=int(pre.shape[0]),
+                    step_probs=step_probs,
                 )
             )
         return OcrOutcome(
@@ -340,7 +349,9 @@ class PlateReader:
             cpu_s=time.thread_time() - cpu_before,
         )
 
-    def _ocr_crop(self, prepared_bgr: object) -> tuple[str, float, list[float], list[float], float]:
+    def _ocr_crop(
+        self, prepared_bgr: object
+    ) -> tuple[str, float, list[float], list[float], float, tuple[tuple[float, ...], ...]]:
         import cv2
         import numpy as np
 
@@ -348,7 +359,10 @@ class PlateReader:
         resized = resize_rgb_for_ocr(rgb)
         batch = np.ascontiguousarray(resized[None, ...])
         logits = self._ocr.run(None, {self._ocr_input: batch})[0][0]
-        return decode_characters(logits.tolist(), self._alphabet)
+        steps = logits.tolist()
+        decoded = decode_characters(steps, self._alphabet)
+        probs = tuple(tuple(round(p, 5) for p in row) for row in step_probabilities(steps))
+        return (*decoded, probs)
 
 
 DFL_BINS = 16

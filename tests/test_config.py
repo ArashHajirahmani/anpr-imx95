@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -108,5 +109,26 @@ def test_ocr_workers_defaults_and_validates(tmp_path: Path) -> None:
     assert load_config(path).service.ocr_workers == 4
     body["service"]["ocr_workers"] = 0
     path.write_text(json.dumps(body), encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path)
+
+
+def test_vote_section_defaults_and_validation(tmp_path) -> None:
+    sample = json.loads(EXAMPLE.read_text())
+    config = load_config(EXAMPLE)
+    assert config.recognizer.vote.window == 16
+    assert config.recognizer.vote.release_posterior == 0.9
+
+    del sample["recognizer"]["vote"]
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps(sample))
+    assert load_config(path).recognizer.vote.evidence_weight == 0.3
+
+    sample["recognizer"]["vote"] = {"null_logp": 1.0}
+    path.write_text(json.dumps(sample))
+    with pytest.raises(ConfigError):
+        load_config(path)
+    sample["recognizer"]["vote"] = {"release_posterior": 0.4}
+    path.write_text(json.dumps(sample))
     with pytest.raises(ConfigError):
         load_config(path)

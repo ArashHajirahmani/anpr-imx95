@@ -85,6 +85,8 @@ def run_streams(
             ocr_floor(config.recognizer.min_confidence, config.service.runtime),
             ocr_floor(config.recognizer.min_char_confidence, config.service.runtime),
             config.service.jpeg_quality,
+            config.recognizer.vote,
+            config.recognizer.charset,
         )
         if hasattr(plate_reader, "detect") and hasattr(plate_reader, "recognize"):
             from anpr.staged import StagedRecognizer

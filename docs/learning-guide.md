@@ -680,7 +680,7 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements-host.txt
 ```
 
-Large host tools go under `/run/media/arash/Projects/iMX95/host-tools/`, not `/opt` (it was full).
+Large host tools go in a dedicated host-tools directory outside the repo, not `/opt` (it was full on the dev machine).
 
 ### The pipeline stages [repo `convert_neutron_tflite.py`]
 

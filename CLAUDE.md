@@ -56,7 +56,7 @@ Run all four before calling a Python change done (the `anpr-verify` skill does t
 
 ## Tooling
 
-- Host tool install location: `/opt` was full; the SDK is symlinked into `/opt`, but install other large host tools (eIQ Toolkit / `neutron-converter`, MediaMTX, toolchains, `gh` if bulky) under `/run/media/arash/Projects/iMX95/host-tools/`, never `/opt`. The Yocto SDK is at `/run/media/arash/Projects/iMX95/host-tools/fsl-imx-wayland/6.18-wrynose` (source its `environment-setup-armv8-2a-poky-linux` for cross builds; root-owned). Small packages may use default system paths. Keep all of this outside the repo.
+- Host tool install location: `/opt` was full; the SDK is symlinked into `/opt`, but install other large host tools (eIQ Toolkit / `neutron-converter`, MediaMTX, toolchains, `gh` if bulky) under the host-tools directory (path in `CLAUDE.local.md`), never `/opt`. The Yocto SDK is under `fsl-imx-wayland/6.18-wrynose` in that directory (source its `environment-setup-armv8-2a-poky-linux` for cross builds; root-owned). Small packages may use default system paths. Keep all of this outside the repo.
 
 - GitHub: `gh` CLI is not installed on this machine. Project `.mcp.json` registers the GitHub MCP server; it needs `GITHUB_PERSONAL_ACCESS_TOKEN` in the environment.
 - Board and bench addresses, accounts, and remote names are kept out of git: see `CLAUDE.local.md` (gitignored). Outward actions (pushing, opening PRs, publishing RTSP, changing the board) need the user's go-ahead; read-only ssh checks on the board are fine.

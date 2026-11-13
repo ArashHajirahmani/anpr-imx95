@@ -10,8 +10,8 @@ Status of the i.MX95 ANPR service. Phase 0 is this repository scaffold.
 - [x] INT8 export preflight that requires 100 calibration frames
 - [x] systemd and udev templates
 - [x] Live RTSP capture loop for the videoCapture bench stream
-- [ ] Neutron inference on a converted model
-- [ ] Board install under `/opt/anpr`
+- [x] Neutron inference on a converted model
+- [x] Board install under `/opt/anpr`
 
 ## Phase 1 — INT8 export
 

@@ -85,7 +85,7 @@ class ReadPublisher:
                 )
                 continue
             logger.info(
-                "ocr candidate %s text=%s confidence=%.2f blank=%.2f box=%d,%d %dx%d",
+                "ocr candidate %s text=%s confidence=%.2f blank=%.2f box=%d,%d %dx%d det=%.2f",
                 name,
                 read.text,
                 float(read.confidence),
@@ -94,6 +94,7 @@ class ReadPublisher:
                 read.box.y,
                 read.box.width,
                 read.box.height,
+                read.box.confidence,
             )
             try:
                 voted = self._voter.consider(name, read)

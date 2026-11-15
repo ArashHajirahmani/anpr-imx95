@@ -1,6 +1,6 @@
 """Temporal plate voting.
 
-When a read carries its CTC step probabilities the tracker fuses evidence per track
+When a read carries its per-slot probabilities the tracker fuses evidence per track
 (``anpr.fusion``): every frame scores a pool of candidate texts and the posterior
 decides the release. Reads without probabilities use the exact-text consensus below.
 
@@ -17,14 +17,17 @@ single-frame flips (K to M, extra prefix) never reach the UI.
 
 from __future__ import annotations
 
+import logging
 from collections import deque
 from dataclasses import dataclass, replace
 
-from anpr.ctc import mean_step_entropy
 from anpr.fusion import FusionSettings, FusionState
 from anpr.plates import PLATE_ALPHABET
 from anpr.recognize import PlateRead
+from anpr.slots import mean_step_entropy
 from anpr.types import PlateBox
+
+logger = logging.getLogger(__name__)
 
 MARGIN_TRUST = 0.10
 BLANK_TRUST = 0.25
@@ -81,9 +84,19 @@ class PlateVoteTracker:
         track = self._match_fusion(stream, read.box, settings)
         probs = [list(step) for step in read.step_probs]
         weight = 1.0 / (1.0 + settings.quality_slope * mean_step_entropy(probs))
-        track.state.add(probs, weight, (read.text,))
+        det = max(0.0, min(1.0, float(read.box.confidence)))
+        quality = weight * det**settings.det_weight_power
+        track.state.add(probs, weight, (read.text,), quality)
         track.box = read.box
         text, posterior = track.state.leader()
+        logger.debug(
+            "vote %s read=%s quality=%.2f leader=%s posterior=%.2f",
+            stream,
+            read.text,
+            quality,
+            text,
+            posterior,
+        )
         if not text or posterior < settings.release_posterior:
             return None
         return replace(

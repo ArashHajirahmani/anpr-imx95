@@ -34,6 +34,8 @@ class DetectorConfig:
     input_width: int
     input_height: int
     model: str = ""
+    # Boxes narrower than this many pixels are dropped before OCR (0 = keep all).
+    min_plate_width: int = 0
 
 
 @dataclass(frozen=True)
@@ -140,6 +142,9 @@ def _detector(payload: dict[str, object]) -> DetectorConfig:
         conf_threshold=float(threshold),
         input_width=_positive_int(body.get("input_width"), "detector.input_width"),
         input_height=_positive_int(body.get("input_height"), "detector.input_height"),
+        min_plate_width=_non_negative_int(
+            body.get("min_plate_width", 0), "detector.min_plate_width"
+        ),
     )
 
 
@@ -221,6 +226,21 @@ def _vote(raw: object) -> FusionSettings:
             body.get("quality_slope", default.quality_slope),
             "recognizer.vote.quality_slope",
         ),
+        high_quality=_unit_float(
+            body.get("high_quality", default.high_quality), "recognizer.vote.high_quality"
+        ),
+        high_min_frames=_positive_int(
+            body.get("high_min_frames", default.high_min_frames),
+            "recognizer.vote.high_min_frames",
+        ),
+        det_weight_power=_non_negative(
+            body.get("det_weight_power", default.det_weight_power),
+            "recognizer.vote.det_weight_power",
+        ),
+        high_ttl_frames=_positive_int(
+            body.get("high_ttl_frames", default.high_ttl_frames),
+            "recognizer.vote.high_ttl_frames",
+        ),
     )
 
 
@@ -249,6 +269,10 @@ def _quality(raw: object) -> QualitySettings:
         min_contrast=_non_negative(
             body.get("min_contrast", 25.0),
             "recognizer.quality.min_contrast",
+        ),
+        min_sharpness=_non_negative(
+            body.get("min_sharpness", 0.0),
+            "recognizer.quality.min_sharpness",
         ),
     )
 
@@ -411,6 +435,12 @@ def _bool(value: object, label: str) -> bool:
 def _positive_int(value: object, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ConfigError(f"{label} must be a positive integer")
+    return value
+
+
+def _non_negative_int(value: object, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ConfigError(f"{label} must be a non-negative integer")
     return value
 
 

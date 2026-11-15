@@ -16,7 +16,9 @@ def test_example_config_loads() -> None:
     assert config.enabled_streams()[0].name == "videoCapture"
     assert config.enabled_streams()[0].uri == "rtsp://10.0.0.117:8554/videoCapture"
     assert config.detector.path.endswith("plate_detector.onnx")
-    assert config.detector.conf_threshold == 0.70
+    assert config.detector.conf_threshold == 0.45
+    assert config.detector.min_plate_width == 32
+    assert config.recognizer.quality.min_sharpness == 60
     assert config.recognizer.enabled is True
     assert config.recognizer.path.endswith("cct_s_v2_global.onnx")
     assert config.recognizer.min_confidence == 0.70
@@ -91,7 +93,7 @@ def test_rejects_duplicate_stream_names(tmp_path: Path) -> None:
 
 def _write(tmp_path: Path, *, conf_threshold: float = 0.5, stream_type: str = "rtsp") -> Path:
     text = EXAMPLE.read_text(encoding="utf-8")
-    text = text.replace('"conf_threshold": 0.70', f'"conf_threshold": {conf_threshold}')
+    text = text.replace('"conf_threshold": 0.45', f'"conf_threshold": {conf_threshold}')
     text = text.replace('"type": "rtsp"', f'"type": "{stream_type}"', 1)
     path = tmp_path / "config.json"
     path.write_text(text, encoding="utf-8")
@@ -169,3 +171,27 @@ def test_recognizer_plain_paths_still_work(tmp_path: Path) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
     loaded = load_config(path).recognizer
     assert (loaded.model, loaded.path, loaded.npu_path) == ("", "/m/a.onnx", "/m/a.tflite")
+
+
+def test_gate_keys_validate(tmp_path: Path) -> None:
+    text = EXAMPLE.read_text(encoding="utf-8")
+    bad_width = tmp_path / "w.json"
+    bad_width.write_text(text.replace('"min_plate_width": 32', '"min_plate_width": -1'))
+    with pytest.raises(ConfigError, match="min_plate_width"):
+        load_config(bad_width)
+    bad_sharp = tmp_path / "s.json"
+    bad_sharp.write_text(text.replace('"min_sharpness": 60', '"min_sharpness": -5'))
+    with pytest.raises(ConfigError, match="min_sharpness"):
+        load_config(bad_sharp)
+
+
+def test_tier_vote_keys_validate(tmp_path) -> None:
+    sample = json.loads(EXAMPLE.read_text())
+    vote = load_config(EXAMPLE).recognizer.vote
+    assert vote.high_min_frames >= 2
+    assert vote.det_weight_power >= 0
+    sample["recognizer"]["vote"]["high_quality"] = 1.5
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps(sample))
+    with pytest.raises(ConfigError, match="high_quality"):
+        load_config(path)

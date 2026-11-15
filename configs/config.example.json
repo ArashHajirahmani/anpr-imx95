@@ -19,9 +19,10 @@
     "path": "/opt/anpr/models/plate_detector.onnx",
     "npu_path": "/opt/anpr/models/plate_detector.neutron.tflite",
     "delegate_path": "/usr/lib/libneutron_delegate.so",
-    "conf_threshold": 0.70,
+    "conf_threshold": 0.45,
     "input_width": 640,
-    "input_height": 640
+    "input_height": 640,
+    "min_plate_width": 32
   },
   "recognizer": {
     "enabled": true,
@@ -51,14 +52,19 @@
       "evidence_weight": 0.3,
       "null_logp": -8.0,
       "release_posterior": 0.9,
-      "quality_slope": 4.0
+      "quality_slope": 4.0,
+      "high_quality": 0.35,
+      "high_min_frames": 3,
+      "det_weight_power": 1.0,
+      "high_ttl_frames": 120
     },
     "quality": {
       "enabled": true,
       "min_laplacian_var": 40,
       "min_brightness": 40,
       "max_brightness": 220,
-      "min_contrast": 25
+      "min_contrast": 25,
+      "min_sharpness": 60
     },
     "enhancer": {
       "enabled": true,

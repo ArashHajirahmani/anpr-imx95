@@ -6,7 +6,7 @@ PLATE_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_"
 PLATE_PAD = "_"
 OCR_WIDTH = 128
 OCR_HEIGHT = 64
-# Minimum per-character softmax after CTC collapse. Chance over 37 symbols is ~0.027.
+# Minimum per-character softmax of a decoded slot. Chance over 37 symbols is ~0.027.
 # 0.70 is the high-trust floor from board OCR logs: every kept glyph must clear it.
 MIN_OCR_CONFIDENCE = 0.70
 # The INT8 OCR score for the same crop sits just under the float score.
@@ -61,10 +61,12 @@ def decode_characters(
     alphabet: str = PLATE_ALPHABET,
     pad: str = PLATE_PAD,
 ) -> tuple[str, float, list[float], list[float], float]:
-    """CTC-greedy decode: drop blanks, collapse repeats, report min char conf.
+    """Slot decode: take each slot's best class, drop pad slots, keep repeated glyphs.
 
-    Returns text, min confidence, per-char confidences, per-char top1-top2
-    margins, and the worst blank-competition uncertainty anywhere in the steps.
+    The model has one head per character slot (not a CTC alignment), so "077" is
+    three slots and the two 7s must both survive. Returns text, min confidence,
+    per-char confidences, per-char top1-top2 margins, and the worst pad-competition
+    uncertainty (best non-pad runner-up probability in any pad slot).
     """
     if not steps:
         return "", 0.0, [], [], 0.0
@@ -79,11 +81,6 @@ def decode_characters(
             second = _second_best_non_blank(probs, alphabet, pad)
             if second is not None:
                 blank_uncertainty = max(blank_uncertainty, second)
-            continue
-        if chars and character == chars[-1]:
-            if confidence > confidences[-1]:
-                confidences[-1] = confidence
-                margins[-1] = margin
             continue
         chars.append(character)
         confidences.append(confidence)

@@ -31,44 +31,19 @@ def test_decode_strips_padding() -> None:
     assert blank_uncertainty >= 0.0
 
 
-def test_decode_collapses_repeated_non_blanks() -> None:
+def test_decode_keeps_repeated_glyphs_in_adjacent_slots() -> None:
     alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_"
     pad = alphabet.index("_")
-    c_idx = alphabet.index("C")
-    a_idx = alphabet.index("A")
     steps = [[0.0] * len(alphabet) for _ in range(5)]
-    steps[0][c_idx] = 2.0  # weaker C (logits → softmax path)
-    steps[1][c_idx] = 5.0  # stronger C — same run
-    steps[2][pad] = 5.0
-    steps[3][a_idx] = 4.0
-    steps[4][a_idx] = 3.0
+    for slot, char in enumerate("0770"):
+        steps[slot][alphabet.index(char)] = 0.9
+        steps[slot][pad] = 0.1
+    steps[4][pad] = 1.0
     text, confidence, char_confidences, margins, _blank = decode_characters(steps)
-    assert text == "CA"
-    assert len(char_confidences) == 2
-    assert char_confidences[0] > char_confidences[1] or char_confidences[0] > 0.5
+    assert text == "0770"  # slot model: 77 is two characters, not one CTC run
+    assert len(char_confidences) == 4
     assert confidence == min(char_confidences)
-    assert len(margins) == 2
-
-
-def test_decode_uses_probability_steps_without_softmax() -> None:
-    alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_"
-    pad = alphabet.index("_")
-    c_idx = alphabet.index("C")
-    a_idx = alphabet.index("A")
-    steps = [[0.0] * len(alphabet) for _ in range(3)]
-    steps[0][c_idx] = 0.91
-    steps[0][pad] = 0.09
-    steps[1] = [0.0] * len(alphabet)
-    steps[1][c_idx] = 0.55
-    steps[1][a_idx] = 0.45
-    steps[2][a_idx] = 0.88
-    steps[2][pad] = 0.12
-    text, confidence, char_confidences, margins, _blank = decode_characters(steps)
-    assert text == "CA"
-    assert char_confidences[0] == 0.91  # max of the C run
-    assert char_confidences[1] == 0.88
-    assert confidence == 0.88
-    assert len(margins) == 2
+    assert len(margins) == 4
 
 
 def test_accept_plate_rejects_weak_character() -> None:

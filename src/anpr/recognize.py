@@ -13,7 +13,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from anpr.ctc import step_probabilities
 from anpr.infer import probe_delegates
 from anpr.plates import (
     PLATE_ALPHABET,
@@ -26,10 +25,12 @@ from anpr.quality import (
     EnhancerSettings,
     QualitySettings,
     crop_quality,
+    crop_sharpness,
     enhance_crop,
     log_quality_reject,
 )
 from anpr.roi_refine import RoiRefineSettings, refine_plate_roi
+from anpr.slots import step_probabilities
 from anpr.sysmon import BusyMeter
 from anpr.types import Frame, PlateBox
 
@@ -54,7 +55,7 @@ class PlateRead:
     pre_ocr_bgr: bytes | None = None
     pre_ocr_width: int = 0
     pre_ocr_height: int = 0
-    # CTC step probabilities of the OCR pass (steps x classes) for evidence fusion.
+    # per-slot probabilities of the OCR pass (steps x classes) for evidence fusion.
     step_probs: tuple[tuple[float, ...], ...] = ()
 
 
@@ -110,6 +111,7 @@ class PlateReader:
         delegate_path: Path | None = None,
         ocr_threads: int = 2,
         ocr_delegate_path: Path | None = None,
+        min_plate_width: int = 0,
     ) -> None:
         import onnxruntime as ort
 
@@ -121,6 +123,7 @@ class PlateReader:
             raise FileNotFoundError(ocr_path)
         self._alphabet = alphabet or PLATE_ALPHABET
         self._threshold = threshold
+        self._min_plate_width = max(0, int(min_plate_width))
         self._runtime = runtime
         self._quality = quality or QualitySettings()
         self._enhancer = enhancer or EnhancerSettings()
@@ -373,6 +376,7 @@ class PlateReader:
         blob, scale, left, top = letterbox(image, DETECTOR_SIZE)
         raw = self._detect(blob)
         boxes = _boxes_from_yolo(raw, self._threshold, scale, left, top, frame.width, frame.height)
+        boxes = drop_narrow_boxes(boxes, self._min_plate_width)
         return DetectedFrame(
             frame=frame,
             image=image,
@@ -399,6 +403,16 @@ class PlateReader:
             crop = np.asarray(refined.crop_bgr)
             if crop.size == 0:
                 continue
+            if self._quality.enabled and self._quality.min_sharpness > 0:
+                sharpness = crop_sharpness(crop)
+                if sharpness < self._quality.min_sharpness:
+                    logger.info(
+                        "crop too blurry %s sharpness=%.0f min=%.0f",
+                        frame.stream_name,
+                        sharpness,
+                        self._quality.min_sharpness,
+                    )
+                    continue
             prepared = enhance_crop(crop, self._enhancer)
             ok, metrics, reason = crop_quality(prepared, self._quality)
             if not ok and reason == "empty":
@@ -471,6 +485,15 @@ class PlateReader:
         decoded = decode_characters(steps, self._alphabet)
         probs = tuple(tuple(round(p, 5) for p in row) for row in step_probabilities(steps))
         return (*decoded, probs)
+
+
+def drop_narrow_boxes(
+    boxes: list[tuple[int, int, int, int, float]], min_width: int
+) -> list[tuple[int, int, int, int, float]]:
+    """Hard gate: plates narrower than ``min_width`` px cannot be read, so skip their OCR."""
+    if min_width <= 0:
+        return boxes
+    return [box for box in boxes if box[2] - box[0] >= min_width]
 
 
 DFL_BINS = 16

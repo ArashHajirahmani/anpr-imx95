@@ -15,6 +15,9 @@ class QualitySettings:
     min_brightness: float = 40.0
     max_brightness: float = 220.0
     min_contrast: float = 25.0
+    # Hard gate (crop skipped, not just logged): Laplacian variance of the raw crop resized
+    # to the OCR canvas. 0 turns it off. See crop_sharpness.
+    min_sharpness: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -58,6 +61,25 @@ def crop_quality(bgr: object, settings: QualitySettings) -> tuple[bool, QualityM
     if metrics.contrast < settings.min_contrast:
         return False, metrics, "low_contrast"
     return True, metrics, ""
+
+
+def crop_sharpness(bgr: object) -> float:
+    """Blur measure: Laplacian variance of the raw crop on a fixed 128x64 gray canvas.
+
+    The fixed size makes it independent of how large the plate is in the frame, and it is
+    taken before enhancement (CLAHE and sharpening push every crop far above any
+    threshold). On the bench clip, well-read crops sit above about 150 and unreadable
+    blurred ones mostly below.
+    """
+    import cv2
+    import numpy as np
+
+    image = np.asarray(bgr)
+    if image.size == 0 or image.ndim != 3:
+        return 0.0
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    small = cv2.resize(gray, (128, 64), interpolation=cv2.INTER_AREA)
+    return float(cv2.Laplacian(small, cv2.CV_64F).var())
 
 
 def enhance_crop(bgr: object, settings: EnhancerSettings) -> object:

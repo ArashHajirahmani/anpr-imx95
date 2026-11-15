@@ -5,6 +5,7 @@ from anpr.quality import (
     EnhancerSettings,
     QualitySettings,
     crop_quality,
+    crop_sharpness,
     enhance_crop,
 )
 
@@ -57,3 +58,35 @@ def test_ocr_preprocess_contract_after_enhance() -> None:
     batch = np.ascontiguousarray(resized[None, ...])
     assert batch.dtype == np.uint8
     assert batch.shape == (1, OCR_HEIGHT, OCR_WIDTH, 3)
+
+
+def _text_like(width: int, height: int) -> np.ndarray:
+    image = np.full((height, width, 3), 230, dtype=np.uint8)
+    step = max(2, width // 16)
+    for x in range(step, width - step, step * 2):
+        image[height // 5 : height * 4 // 5, x : x + step // 2 + 1] = 20
+    return image
+
+
+def test_sharpness_separates_blurred_from_sharp() -> None:
+    import cv2
+
+    sharp = _text_like(256, 128)
+    blurred = cv2.GaussianBlur(sharp, (0, 0), 6)
+    assert crop_sharpness(sharp) > 150
+    assert crop_sharpness(blurred) < 50
+
+
+def test_sharpness_does_not_depend_on_plate_size() -> None:
+    import cv2
+
+    base = _text_like(512, 256)
+    sizes = [(512, 256), (256, 128), (160, 80)]
+    values = [
+        crop_sharpness(cv2.resize(base, size, interpolation=cv2.INTER_AREA)) for size in sizes
+    ]
+    assert max(values) / min(values) < 1.5
+
+
+def test_sharpness_of_an_empty_crop_is_zero() -> None:
+    assert crop_sharpness(np.zeros((0, 0, 3), dtype=np.uint8)) == 0.0

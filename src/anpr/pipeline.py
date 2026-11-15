@@ -212,6 +212,7 @@ def _load_reader(config: AppConfig) -> object | None:
             ocr_path=Path(ocr_path),
             alphabet=config.recognizer.charset,
             threshold=config.detector.conf_threshold,
+            min_plate_width=config.detector.min_plate_width,
             runtime=config.service.runtime,
             quality=config.recognizer.quality,
             enhancer=config.recognizer.enhancer,

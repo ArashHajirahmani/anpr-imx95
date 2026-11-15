@@ -3,7 +3,7 @@ from pathlib import Path
 
 import numpy as np
 
-from anpr.recognize import PlateReader
+from anpr.recognize import PlateReader, drop_narrow_boxes
 from anpr.sysmon import BusyMeter
 
 
@@ -78,3 +78,9 @@ def test_int8_ocr_input_is_quantized_from_pixels() -> None:
     reader._ocr_input_scale = 0.9
     reader._ocr_input_zero_point = -120
     assert reader._ocr_feed(pixels).tolist() == [[-120, -9, 127]]
+
+
+def test_width_gate_drops_only_narrow_boxes() -> None:
+    boxes = [(0, 0, 39, 20, 0.9), (10, 10, 50, 30, 0.8), (0, 0, 120, 50, 0.7)]
+    assert drop_narrow_boxes(boxes, 40) == boxes[1:]
+    assert drop_narrow_boxes(boxes, 0) == boxes

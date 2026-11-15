@@ -65,11 +65,12 @@ After YOLO crops a plate, the runtime applies three independent checks. Device t
 
 | Gate | Config | Default behavior |
 | --- | --- | --- |
-| Image quality | `recognizer.quality` | Reject blurry, dark, bright, or low-contrast crops before OCR |
+| Image quality | `recognizer.quality` | Log (soft) dark, bright, or low-contrast crops; `min_sharpness` (60) is a hard gate that skips blurry crops before OCR, `0` turns it off |
+| Minimum plate width | `detector.min_plate_width` | Skip boxes narrower than this many pixels before OCR (32; `0` turns it off) |
 | Optional enhancer | `recognizer.enhancer` | On in the sample; CLAHE / gamma / mild sharpen; never overrides reject gates |
 | ROI refine | `recognizer.roi_refine` | L/R border snap (−20%…+20%) + 5% pad (W/H); perspective off by default |
-| Per-character confidence | `recognizer.min_char_confidence` | Reject if any CTC-collapsed character is below the floor (default 0.70) |
-| Plate confidence | `recognizer.min_confidence` | Min character softmax after collapse (NPU subtracts 0.005); UI shows this min |
+| Per-character confidence | `recognizer.min_char_confidence` | Reject if any decoded character is below the floor (default 0.70) |
+| Plate confidence | `recognizer.min_confidence` | Min character softmax over the decoded slots (NPU subtracts 0.005); UI shows this min |
 
 Accepted plate JSON includes `characters: [{ "char", "confidence" }, ...]`. Uncertain plates are not published. Details are in [docs/architecture.md](docs/architecture.md). When to re-quantize after a camera or lighting change is in [docs/model-export.md](docs/model-export.md).
 

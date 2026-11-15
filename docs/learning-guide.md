@@ -162,9 +162,9 @@ tests/               tests/test_<module>.py, run on a plain host (no NPU/GStream
 | `pipeline.py` | `LatestFrameSlot`, stream threads, wiring |
 | `staged.py` | Detector thread, OCR worker pool, in-order sequencer |
 | `publisher.py` | Releases frames in order into vote/history/result store |
-| `recognize.py` | `PlateReader`: detector (ONNX or TFLite-Neutron), DFL decode, ROI refine, OCR, CTC |
+| `recognize.py` | `PlateReader`: detector (ONNX or TFLite-Neutron), DFL decode, ROI refine, OCR (slot decode) |
 | `roi_refine.py`, `quality.py` | Crop border snapping/perspective; blur/dark/bright gates |
-| `ctc.py`, `fusion.py`, `vote.py` | CTC math, evidence fusion across frames, release logic |
+| `slots.py`, `fusion.py`, `vote.py` | slot likelihood, evidence fusion across frames, release logic |
 | `plate_match.py`, `plates.py` | Alias matching of partial reads, plate text helpers |
 | `results.py` | `ResultStore`, sticky history, fps measurement |
 | `api.py`, `ipc.py`, `web.py`, `static/index.html` | Unix-socket HTTP API; web server and page |
@@ -291,7 +291,7 @@ N is the total anchors over the feature maps at several strides (for 640 input a
 - Input: 128x64 RGB uint8 NHWC crop. Resize uses `INTER_AREA` when shrinking, `INTER_LANCZOS4` when enlarging.
 - Model: fast-plate-ocr **CCT** (Compact Convolutional Transformer). Full architecture in section 6B.
 - Output (checked on the ONNX files): `plate` `[batch, 10, 37]` and `region` `[batch, 66]`. That is **10 fixed character slots**, each a softmax over the 37-symbol alphabet `0-9A-Z_`, where `_` is the *pad* that fills unused slots on the right. It is a slot classifier, **not** a CTC-trained model (the model's own config yaml calls the slots "classification heads").
-- **Repo decode** (`plates.decode_characters`): argmax per slot, drop `_`, **collapse adjacent identical characters** (CTC style), plate confidence = minimum character confidence. See the warning in section 6B about the collapse step.
+- **Repo decode** (`plates.decode_characters`): argmax per slot, drop `_`, keep adjacent identical characters (two slots, two characters), plate confidence = minimum character confidence.
 
 ---
 
@@ -303,7 +303,7 @@ This code is what turns noisy per-frame guesses into a stable plate number. All 
 2. **Enhancer** (optional, on in sample): CLAHE (local contrast), gamma 1.1, mild sharpen. Must still output 128x64 RGB uint8 with no Python normalization (the model has normalization built in).
 3. **Quality gate** (`quality.py`): reject crops that are blurry (variance of Laplacian < 40), too dark (< 40) / bright (> 220), or low-contrast (< 25) before wasting OCR time or poisoning the vote.
 4. **Confidence floors:** `min_confidence`, `min_char_confidence` (0.70 default). The NPU path subtracts 0.005 because INT8 slightly lowers confidences.
-5. **Temporal evidence fusion** (`ctc.py`, `fusion.py`, `vote.py`): per tracked plate (boxes matched across frames by IoU), keep a pool of candidate texts (greedy read plus CTC prefix-beam candidates). Score every candidate against the last 16 frames with the **CTC forward likelihood** (how likely is this text given this frame's probabilities), floor at `null_logp`, add an "unknown" hypothesis, scale by `evidence_weight` (frames are correlated, not independent), and weight frames by `1/(1 + quality_slope * mean_entropy)` (confident frames count more). Release when the leading candidate's posterior reaches 0.9. A crisp contradicting frame withholds release rather than flipping the result. The published confidence is that posterior.
+5. **Temporal evidence fusion** (`slots.py`, `fusion.py`, `vote.py`): per tracked plate (boxes matched across frames by IoU), keep a pool of candidate texts (greedy read plus slot-beam candidates). Score every candidate against the last 16 frames with the **slot likelihood** (product of each slot's probability of the candidate's character, or of `_` past its end; how likely is this text given this frame's probabilities), floor at `null_logp`, add an "unknown" hypothesis, scale by `evidence_weight` (frames are correlated, not independent), and weight frames by `1/(1 + quality_slope * mean_entropy)` (confident frames count more). Release when the leading candidate's posterior reaches 0.9. A crisp contradicting frame withholds release rather than flipping the result. The published confidence is that posterior.
    - Compare with naive majority voting: a truncated read ("AKW568" vs "CAKW568") costs the right candidate only a bit of evidence instead of casting a wrong vote.
 6. **History / aliasing** (`results.py`, `plate_match.py`): up to `history_limit` distinct plates; partial reads (prefix/suffix, one char dropped) update the matching slot with the best text and crop.
 
@@ -352,7 +352,7 @@ Both are downloaded float (FP32) ONNX files (`tools/host/fetch_models.sh`). Our 
 - **Formats:** *ONNX* is the portable interchange format (also what ONNX Runtime executes). *TFLite* (`.tflite`, FlatBuffers) is the mobile/embedded format; it is what the Neutron compiler consumes and what `tflite_runtime` runs. Conversion ONNX->TFLite (`onnx2tflite`) maps ops one by one, and layouts change (ONNX is NCHW; TFLite is NHWC), which can add Transpose ops.
 - **Anchor-based/grid detectors (YOLO):** the network outputs a fixed grid of predictions (N anchors). Each has a box and a score; most scores are near 0. Post-processing = keep high scores, decode boxes, de-duplicate (NMS). Detector cost is fixed per frame regardless of plates.
 - **Why a detector then OCR (two-stage):** detector localizes cheaply at 640x640; OCR reads a tiny tight crop at 128x64, much better than reading whole frames.
-- **Slot classification vs CTC:** the OCR here predicts a fixed number of character slots (10); each slot is an independent softmax over the alphabet, with `_` as right padding. **CTC** is a different scheme (variable-length output over T steps, blank symbol, repeat collapsing). This repo's decoder and fusion code apply CTC-style logic on top of the slot output, which works for typical plates but has a weakness with doubled characters (section 6B). The per-slot probabilities carry uncertainty, which the fusion step exploits.
+- **Slot classification vs CTC:** the OCR here predicts a fixed number of character slots (10); each slot is an independent softmax over the alphabet, with `_` as right padding. **CTC** is a different scheme (variable-length output over T steps, blank symbol, repeat collapsing). This repo's decoder and fusion code score slots directly (an earlier version applied CTC-style repeat merging, which dropped the second 7 of `BXCW077` and the second X of `DJXX692`; fixed). The per-slot probabilities carry uncertainty, which the fusion step exploits.
 - **Attention (transformer) blocks:** Q, K, V linear projections, `softmax(Q K^T)` then multiply V. Linears map well to NPUs; softmax and the activation-by-activation matmuls generally do not on Neutron, so they stay on the CPU (see 10.2).
 - **FP32 vs INT8:** FP32 weights/activations -> 8-bit integers = 4x less memory, far less bandwidth, integer MAC arrays (which is what an NPU is). Costs a little accuracy. Next section.
 
@@ -516,9 +516,9 @@ frame_055  S: CL________   XS: __________      (S: min slot confidence 0.12, rej
 frame_077  S: 10MTTY____   XS: 1FNTT_____      (low confidence, adjacent identical slots "TT")
 ```
 
-The repo decoder (`plates.decode_characters`) and the fusion code (`ctc.py`, CTC forward likelihood and prefix beam search) treat these slots as a CTC sequence: `_` as blank and **adjacent identical characters merged into one**. Two consequences:
+The repo decoder (`plates.decode_characters`) and the fusion code (`slots.py`: slot likelihood and slot beam search) treat them as slots: argmax per slot, `_` stripped, repeated characters kept. An earlier version merged adjacent identical characters CTC-style; that dropped the second 7 of `BXCW077` and the second X of `DJXX692` and is fixed. Two consequences:
 
-- **Likely weakness, not yet tested on hardware:** a plate that really contains a doubled character (for example `AA12` or `4411`) occupies two adjacent slots with the same letter. The decoder merges them (`A12`, `411`), and the CTC likelihood used by the fusion step only accepts a doubled letter when a blank sits between the two copies, so the correct text is penalized. The bench plate `CAKW568` has no doubled character, so the bench cannot reveal this. **Action item:** test with a plate that has a double letter or digit before trusting the output on such plates. A slot-aware decoder (argmax per slot, strip only `_`) would not have this problem.
+- **Fixed (was a real bug):** a plate that really contains a doubled character (for example `AA12` or `4411`) occupies two adjacent slots with the same letter. The decoder merges them (`A12`, `411`), and the CTC likelihood used by the fusion step only accepts a doubled letter when a blank sits between the two copies, so the correct text is penalized. The bench plate `CAKW568` has no doubled character, so only the `IMG_9681`-`9683` clips (`BXCW077`, `DJXX692`) revealed it. The decoder now takes the argmax per slot and strips only `_`.
 - **Confidence per slot is a plain softmax**, so the "min over characters" confidence and the entropy-based frame weights are meaningful and cheap to compute.
 
 Also note the plate width limit: the crop is resized to 128x64 regardless of source size. A plate that is only 25 to 60 px wide in the frame is upscaled 2 to 5 times, which adds no information. Hence the observed limit of about 130 px for reliable reads.
@@ -930,7 +930,7 @@ Cross-checks that find most NPU bugs: (a) float vs quantized-CPU vs compiled-NPU
 - **CCT:** Compact Convolutional Transformer; conv stem + attention.
 - **CMA:** Contiguous Memory Allocator; physically contiguous RAM for DMA devices like the NPU.
 - **Calibration:** measuring activation ranges on representative data to set quantization scales.
-- **CTC:** loss/decoding scheme for sequences without alignment; blank + repeat collapse. The OCR models here are slot classifiers; the repo only applies CTC-style decoding on top.
+- **CTC:** loss/decoding scheme for sequences without alignment; blank + repeat collapse. The OCR models here are slot classifiers; this repo does not use CTC.
 - **Slot head:** one fixed output position of the OCR (10 of them), a softmax over 37 symbols.
 - **DyT:** Dynamic Tanh, `tanh(alpha*x)*gamma+beta`, used instead of LayerNorm in the CCT blocks (the many `Tanh` ops in the graph).
 - **Delegate:** TFLite plugin executing part of a graph on an accelerator.
@@ -971,7 +971,7 @@ Concepts
 8. Why does the pipeline drop frames instead of queueing them?
 9. Why was the DFL decode moved out of the model? What did it save?
 10. Why does the OCR on the NPU still spend most of its time on CPU?
-11. What does the fusion vote do that a majority vote does not? (And what does its CTC assumption get wrong for slot outputs?)
+11. What does the fusion vote do that a majority vote does not? (And why does it score slots instead of CTC alignments?)
 12. What happens to accuracy when the plate box is narrower than about 130 px, and why is more voting not the cure?
 
 Hands-on (in this order; all read-only unless noted)

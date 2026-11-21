@@ -30,3 +30,6 @@ tools/host/auto.key
 # Claude Code local overrides
 .claude/settings.local.json
 CLAUDE.local.md
+
+# LinkedIn post drafts (local only)
+docs/linkedin/
